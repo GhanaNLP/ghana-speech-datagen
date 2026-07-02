@@ -7,7 +7,7 @@ a manifest locally, runs multiple model instances in parallel, and resumes where
 it left off.
 
 > **A GPU is required** for usable speed (VoxCPM is a neural TTS model; ~4.5 GB
-> VRAM per instance). A T4 works; bigger GPUs run more instances in parallel.
+> VRAM per instance). Instances are auto-sized from your GPU's VRAM.
 
 ## Supported languages
 
@@ -15,17 +15,17 @@ The `ghana-tts-36k` model supports **41+ Ghanaian languages**. See the model car
 at [hf.co/ghananlpcommunity/ghana-tts-36k](https://huggingface.co/ghananlpcommunity/ghana-tts-36k)
 for the full list.
 
-## Run in the cloud (free T4)
+## Run in the cloud
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ghananlpcommunity/ghana-tts-datagen/blob/main/notebooks/ghana_tts_datagen.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/GhanaNLP/ghana-tts-datagen/blob/main/notebooks/ghana_tts_datagen.ipynb)
 
-Pick a **GPU** runtime (Colab: `Runtime → Change runtime type → T4 GPU`).
+Pick a **GPU** runtime (Colab: `Runtime → Change runtime type → GPU`).
 
 ## Install (local)
 
 > **Local use needs an NVIDIA GPU.** Without one, generation is impractically
-> slow — use the **Colab notebook above** (free T4) instead. Clone locally only
-> if you have a GPU.
+> slow — use the **Colab notebook above** instead. Clone locally only if you have
+> a GPU.
 
 ```bash
 git clone https://github.com/ghananlpcommunity/ghana-tts-datagen.git
@@ -106,15 +106,14 @@ re-run the same command) and it reads `progress.json` and skips finished rows.
 ## Performance & GPU
 
 - **Parallel instances.** Several model copies pull rows off a shared queue
-  (~4.5 GB VRAM each in fp32). It auto-sizes by VRAM — e.g. **2 instances on a
-  T4** (16 GB). Push harder with `--instances 3` if it's stable; a T4 often
-  becomes compute-bound past that.
+  (~4.5 GB VRAM each in fp32). The number of instances is auto-detected from
+  your GPU's VRAM. Override with `--instances N`.
 - **Precision** (`--precision`):
   - `fp32` — default, safest, highest quality.
   - `fp16` — ~half the VRAM (so ~2× the instances) and faster on most GPUs, **but
     may degrade quality or NaN** on TTS models; preview before committing.
   - `bf16` — ~half the VRAM, more numerically stable than fp16, **but needs an
-    Ampere+ GPU (A100/L4/H100) — not a T4**.
+    Ampere+ GPU (A100, L4, H100, H200, etc.)**.
 - **Sample rate.** The model synthesises at **16 kHz**; output is resampled to
   `--sample-rate` so files match your framework, but true bandwidth stays ~8 kHz
   (upsampling doesn't add detail).

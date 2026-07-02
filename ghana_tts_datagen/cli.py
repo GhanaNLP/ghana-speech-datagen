@@ -53,8 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--precision", choices=["fp32", "fp16", "bf16"], default="fp32",
                      help="model precision. fp32 = safest (default). fp16 ≈ half VRAM & "
                           "faster, but may degrade quality / NaN on some TTS models. "
-                          "bf16 ≈ half VRAM, more stable than fp16, but needs an Ampere+ "
-                          "GPU (A100/L4/H100) — NOT a T4.")
+                           "bf16 ≈ half VRAM, more stable than fp16, but needs an Ampere+ "
+                           "GPU (A100, L4, H100, H200…).")
     gen.add_argument("--instances", type=int, help="parallel model instances (default: auto by VRAM)")
     gen.add_argument("--cfg", type=float, default=2.0, dest="cfg_value", help="CFG value")
     gen.add_argument("--steps", type=int, default=10, help="inference timesteps")
