@@ -13,9 +13,11 @@ Generate synthetic TTS training data from a text dataset, locally. Examples:
     ghana-tts-datagen --text-file sentences.txt --hours 2 --formats piper
 
     # Resume: just re-run the same command (skips finished rows)
-    # Push the result to an HF dataset repo when done
+    # Push the result to an HF dataset repo when done (HF_TOKEN required)
     ghana-tts-datagen --dataset … --text-column text --hours 5 --name twi-run \\
         --formats ljspeech,vits --push you/my-synth
+
+The model is **private** — set HF_TOKEN in your environment or pass --token.
 """
 
 from __future__ import annotations
@@ -69,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
     out.add_argument("--save-every", type=int, default=200, help="write manifest every N rows")
     out.add_argument("--push", metavar="REPO_ID", help="upload the result to this HF dataset repo")
     out.add_argument("--private", action="store_true", help="make the pushed repo private")
-    out.add_argument("--token", help="HF token (else HF_TOKEN env)")
+    out.add_argument("--token", help="HF token (required; falls back to HF_TOKEN env)")
 
     spk = p.add_argument_group("speaker reference audio (default: bundled Twi male/female)")
     spk.add_argument("--speaker-dir",
@@ -115,6 +117,11 @@ def _build_speakers(args) -> dict | None:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     args.token = args.token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if not args.token:
+        sys.exit("HF_TOKEN is required. Set the HF_TOKEN environment variable or pass --token TOKEN. "
+                 "The model (ghana-tts-36k) is private — you need a Hugging Face token with read access.")
+
+    os.environ["HF_TOKEN"] = args.token
 
     if args.list_datasets:
         from huggingface_hub import HfApi

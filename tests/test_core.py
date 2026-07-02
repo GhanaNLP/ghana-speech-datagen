@@ -137,6 +137,16 @@ def test_cli_build_speakers():
     assert "text" not in spk["female"]
 
 
+def test_cli_token_required():
+    # Should exit with token message when no token is provided
+    try:
+        cli.main(["--text-file", "s.txt"])
+    except SystemExit as e:
+        assert "HF_TOKEN" in str(e)
+    else:
+        raise AssertionError("expected SystemExit without token")
+
+
 def test_cli_parser_and_requirements():
     a = cli.build_parser().parse_args(
         ["--dataset", "org/ds", "--text-column", "text", "--hours", "5",
@@ -148,8 +158,9 @@ def test_cli_parser_and_requirements():
 
     assert cli.build_parser().parse_args(["--text-file", "s.txt"]).text_file == "s.txt"
 
+    # Should exit with source error when token IS set but no source is given
     try:
-        cli.main(["--split", "train"])
+        cli.main(["--split", "train", "--token", "dummy"])
     except SystemExit as e:
         assert "text-file" in str(e) or "dataset" in str(e)
     else:
