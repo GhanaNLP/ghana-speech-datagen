@@ -1,0 +1,17 @@
+# GPU strongly recommended (VoxCPM TTS inference). System package: ffmpeg.
+voxcpm
+datasets>=2.19
+huggingface_hub>=0.23
+soundfile>=0.12
+librosa>=0.10
+numpy
+scipy
+tqdm
+torch
+torchaudio
+transformers
+tokenizers
+accelerate
+sentencepiece
+modelscope
+funasr
