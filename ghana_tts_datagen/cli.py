@@ -118,8 +118,13 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     args.token = args.token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     if not args.token:
-        sys.exit("HF_TOKEN is required. Set the HF_TOKEN environment variable or pass --token TOKEN. "
-                 "The model (ghana-tts-36k) is private — you need a Hugging Face token with read access.")
+        try:
+            import getpass
+            args.token = getpass.getpass("HF Token (required — private model): ").strip()
+        except (EOFError, OSError):
+            args.token = ""
+        if not args.token:
+            sys.exit("No token provided. Set --token or the HF_TOKEN env var.")
 
     os.environ["HF_TOKEN"] = args.token
 

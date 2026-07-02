@@ -138,11 +138,11 @@ def test_cli_build_speakers():
 
 
 def test_cli_token_required():
-    # Should exit with token message when no token is provided
+    # Should exit with "No token provided" when none given (prompt returns empty in non-tty)
     try:
         cli.main(["--text-file", "s.txt"])
     except SystemExit as e:
-        assert "HF_TOKEN" in str(e)
+        assert "No token provided" in str(e) or "HF_TOKEN" in str(e)
     else:
         raise AssertionError("expected SystemExit without token")
 
