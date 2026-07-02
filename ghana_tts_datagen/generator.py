@@ -282,6 +282,7 @@ def generate(
     save_every: int = 200,
     speakers: dict | None = None,
     on_clip=None,
+    on_save=None,
     progress=None,
 ):
     """Generate synthetic speech for a dataset into ``out_dir``.
@@ -295,6 +296,8 @@ def generate(
     ``speakers`` — optional dict keyed by gender (``"male"``, ``"female"``) with
     ``"wav"`` and optionally ``"text"`` keys.  If omitted the bundled reference
     speakers are used.  See :func:`resolve_speakers`.
+    ``on_save(out_dir)`` — called after each manifest write (every ``save_every``
+    rows and at the end).  Useful for incremental push to Hugging Face.
     """
     if texts is None and not (dataset and text_column):
         raise ValueError("Provide either texts=[...] or dataset=... with text_column=...")
@@ -366,12 +369,16 @@ def generate(
         staged += 1
         if staged >= save_every:
             _write_manifest(out_dir, run, meta)
+            if on_save:
+                on_save(out_dir)
             staged = 0
 
     run.feeding_done = True
     for w in workers:
         w.join()
     _write_manifest(out_dir, run, meta)
+    if on_save:
+        on_save(out_dir)
 
     if run.fatal:
         raise RuntimeError(run.fatal)

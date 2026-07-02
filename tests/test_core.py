@@ -137,6 +137,14 @@ def test_cli_build_speakers():
     assert "text" not in spk["female"]
 
 
+def test_generate_has_on_save():
+    import inspect
+    from ghana_tts_datagen.generator import generate as _gen
+    sig = inspect.signature(_gen)
+    assert "on_save" in sig.parameters
+    assert sig.parameters["on_save"].default is None
+
+
 def test_cli_token_required():
     # Should exit with "No token provided" when none given (prompt returns empty in non-tty)
     try:

@@ -9,15 +9,13 @@ Generate synthetic TTS training data from a text dataset, locally. Examples:
     ghana-tts-datagen --dataset ghananlpcommunity/some-text --text-column text \\
         --hours 5 --name twi-run
 
-    # From your own sentences (one per line), as a Piper dataset
-    ghana-tts-datagen --text-file sentences.txt --hours 2 --formats piper
-
-    # Resume: just re-run the same command (skips finished rows)
-    # Push the result to an HF dataset repo when done (HF_TOKEN required)
-    ghana-tts-datagen --dataset … --text-column text --hours 5 --name twi-run \\
-        --formats ljspeech,vits --push you/my-synth
+    # Data is auto-pushed to your HF account every 200 rows (no loss on crash)
+    ghana-tts-datagen --dataset … --text-column text --hours 5 --name twi-run
 
 The model is **private** — set HF_TOKEN in your environment or pass --token.
+Data is automatically pushed to a dataset repo on your HF account as it's
+generated (every --save-every rows). Use --push REPO_ID to override the
+auto-generated repo name, or --private to make it private.
 """
 
 from __future__ import annotations
@@ -69,8 +67,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="TTS manifests to write (comma list): ljspeech,piper,vits,melo")
     out.add_argument("--lang", help="language code for the melo manifest (e.g. TWI)")
     out.add_argument("--save-every", type=int, default=200, help="write manifest every N rows")
-    out.add_argument("--push", metavar="REPO_ID", help="upload the result to this HF dataset repo")
-    out.add_argument("--private", action="store_true", help="make the pushed repo private")
+    out.add_argument("--push", metavar="REPO_ID",
+                     help="override auto-generated HF dataset repo (default: <user>/ghana-tts-synth-<name>)")
+    out.add_argument("--private", action="store_true",
+                     help="make the dataset repo private (default: public)")
     out.add_argument("--token", help="HF token (required; falls back to HF_TOKEN env)")
 
     spk = p.add_argument_group("speaker reference audio (default: bundled Twi male/female)")
@@ -120,7 +120,10 @@ def main(argv: list[str] | None = None) -> int:
     if not args.token:
         try:
             import getpass
-            args.token = getpass.getpass("HF Token (required — private model): ").strip()
+            args.token = getpass.getpass(
+                "HF Token (required — used to load the private model and push your\n"
+                "              generated dataset to your HF account): "
+            ).strip()
         except (EOFError, OSError):
             args.token = ""
         if not args.token:
@@ -150,7 +153,6 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = args.out or os.path.join("data", name)
 
     if args.preview:
-        print(f"Generating {args.preview} preview clip(s)…", file=sys.stderr)
         clips = generator.preview(
             out_dir=out_dir, dataset=args.dataset, text_column=args.text_column, texts=texts,
             config=args.config, split=args.split, voices=args.voices, male_pct=args.male_pct,
@@ -163,6 +165,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  [{c['gender']}] {c['duration']}s  {c['file']}\n      {c['text'][:90]}")
         return 0
 
+    from huggingface_hub import HfApi, create_repo
+
+    # Resolve push repo — user override or auto-generate from their HF username
+    if args.push:
+        push_repo = args.push
+    else:
+        who = HfApi(token=args.token).whoami()
+        push_repo = f"{who['name']}/ghana-tts-synth-{name}"
+    create_repo(push_repo, repo_type="dataset", token=args.token,
+                private=args.private, exist_ok=True)
+    push_url = f"https://huggingface.co/datasets/{push_repo}"
+    print(f"Dataset will be pushed to: {push_url}", file=sys.stderr)
+
     from tqdm.auto import tqdm
     bar = tqdm(total=round(args.hours * 3600), unit="s", unit_scale=False,
                desc="Synthesising audio", file=sys.stderr)
@@ -174,6 +189,13 @@ def main(argv: list[str] | None = None) -> int:
             bar.update(delta)
             state["last"] = total_sec
 
+    def _on_save(dir_path):
+        HfApi(token=args.token).upload_folder(
+            folder_path=dir_path, path_in_repo=os.path.basename(dir_path.rstrip("/")),
+            repo_id=push_repo, repo_type="dataset",
+            commit_message=f"synth data: {bar.n:.0f}s / {bar.total:.0f}s",
+        )
+
     summary = generator.generate(
         out_dir=out_dir, dataset=args.dataset, text_column=args.text_column, texts=texts,
         config=args.config, split=args.split, target_hours=args.hours,
@@ -182,7 +204,8 @@ def main(argv: list[str] | None = None) -> int:
         cfg_value=args.cfg_value, steps=args.steps, max_chars=args.max_chars,
         model_id=args.model, token=args.token, save_every=args.save_every,
         speakers=speakers,
-        on_clip=_on_clip, progress=lambda m: bar.set_description(m[:48]),
+        on_clip=_on_clip, on_save=_on_save,
+        progress=lambda m: bar.set_description(m[:48]),
     )
     bar.close()
 
@@ -194,17 +217,7 @@ def main(argv: list[str] | None = None) -> int:
     print("   wavs/  manifest.jsonl  progress.json"
           + ("  " + "  ".join(os.path.basename(w) for w in written) if written else ""),
           file=sys.stderr)
-
-    if args.push:
-        from huggingface_hub import HfApi, create_repo
-        create_repo(args.push, repo_type="dataset", token=args.token,
-                    private=args.private, exist_ok=True)
-        HfApi(token=args.token).upload_folder(
-            folder_path=out_dir, path_in_repo=os.path.basename(out_dir.rstrip("/")),
-            repo_id=args.push, repo_type="dataset",
-            commit_message=f"synthetic data: {summary['rows']} clips, {summary['hours']:.2f}h",
-        )
-        print(f"   pushed → https://huggingface.co/datasets/{args.push}", file=sys.stderr)
+    print(f"   pushed to {push_url}", file=sys.stderr)
     return 0
 
 
