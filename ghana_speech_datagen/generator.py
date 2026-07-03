@@ -118,7 +118,7 @@ def normalize_audio(audio_input, out_dir: str) -> str:
             wav = src[1]
         else:
             wav, _ = librosa.load(src[1], sr=VOCPM_SR, mono=True)
-        tmp = out_path + ".tmp"
+        tmp = out_path + ".tmp" + ".wav"
         sf.write(tmp, wav, VOCPM_SR, subtype="PCM_16")
         os.replace(tmp, out_path)
     return out_path
