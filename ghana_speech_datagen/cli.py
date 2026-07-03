@@ -133,12 +133,12 @@ def build_parser() -> argparse.ArgumentParser:
                           help=f"list datasets under the {DATASET_ORG} org")
 
     # ---- asr ----
-    asr = sub.add_parser("asr", help="Prepare ASR training data from existing audio+text (no GPU)",
+    asr = sub.add_parser("asr", help="Generate synthetic speech using each input audio as voice reference (GPU required)",
                          formatter_class=argparse.RawDescriptionHelpFormatter)
     asr_src = asr.add_argument_group("source (use --dataset OR --audio-dir)")
     asr_src.add_argument("--dataset", help="HF dataset id with audio+text columns")
     asr_src.add_argument("--audio-column", default="audio",
-                         help="column with audio (default: audio)")
+                         help="column with reference audio (default: audio)")
     asr_src.add_argument("--text-column", default="text",
                          help="column with transcripts (default: text)")
     asr_src.add_argument("--config", help="dataset config (optional)")
@@ -152,11 +152,21 @@ def build_parser() -> argparse.ArgumentParser:
     asr_val.add_argument("--min-samples", type=int, default=MIN_ASR_SAMPLES,
                          help=f"minimum valid samples required (default {MIN_ASR_SAMPLES})")
     asr_val.add_argument("--min-duration", type=float, default=1.0,
-                         help="drop clips shorter than this (seconds)")
+                         help="drop generated clips shorter than this (seconds)")
     asr_val.add_argument("--max-duration", type=float, default=30.0,
-                         help="drop clips longer than this (seconds)")
+                         help="drop generated clips longer than this (seconds)")
     asr_val.add_argument("--max-samples", type=int,
                          help="randomly pick at most this many rows from source")
+
+    asr_gen = asr.add_argument_group("generation")
+    asr_gen.add_argument("--sample-rate", type=int, default=DEFAULT_SR,
+                         help=f"output WAV rate (default {DEFAULT_SR})")
+    asr_gen.add_argument("--precision", choices=["fp32", "fp16", "bf16"], default="fp32",
+                         help="model precision")
+    asr_gen.add_argument("--cfg", type=float, default=2.0, dest="cfg_value",
+                         help="CFG value")
+    asr_gen.add_argument("--steps", type=int, default=10, help="inference timesteps")
+    asr_gen.add_argument("--model", default=MODEL_ID, help="VoxCPM model id")
 
     asr_out = asr.add_argument_group("output")
     asr_out.add_argument("--out", help="output directory (default: data/<name>)")
@@ -330,6 +340,8 @@ def _get_audio_duration(path: str) -> float | None:
 
 
 def _cmd_asr(args):
+    from . import generator
+
     token = _resolve_token(args) if (args.push or args.dataset) else None
 
     # Determine source
@@ -349,87 +361,38 @@ def _cmd_asr(args):
 
     name = args.name or default_name
     out_dir = args.out or os.path.join("data", name)
-    wav_dir = Path(out_dir) / "wavs"
-    wav_dir.mkdir(parents=True, exist_ok=True)
 
-    valid = []
-    skipped = 0
+    from tqdm.auto import tqdm
+    bar = tqdm(unit="clip", desc="Generating ASR clips", file=sys.stderr)
+    state = {"last": 0}
 
-    for idx, audio_src, text in rows:
-        if not text:
-            skipped += 1
-            continue
+    def _on_clip(_dur):
+        bar.update(1)
+        state["last"] += 1
 
-        # Resolve audio path
-        if isinstance(audio_src, dict):
-            # HF dataset Audio feature: dict with "path" or "array"
-            path = audio_src.get("path", "")
-            if not path:
-                skipped += 1
-                continue
-        elif isinstance(audio_src, str):
-            path = audio_src
-        else:
-            skipped += 1
-            continue
+    summary = generator.generate_asr(
+        out_dir=out_dir, rows=rows,
+        min_duration=args.min_duration, max_duration=args.max_duration,
+        min_samples=args.min_samples,
+        sample_rate=args.sample_rate, precision=args.precision,
+        cfg_value=args.cfg_value, steps=args.steps,
+        model_id=args.model, token=token,
+        on_clip=_on_clip,
+        progress=lambda m: bar.set_description(m[:48]),
+    )
+    bar.close()
 
-        dur = _get_audio_duration(path)
-        if dur is None:
-            skipped += 1
-            continue
-        if dur < args.min_duration or dur > args.max_duration:
-            skipped += 1
-            continue
-
-        # Copy / symlink audio to output
-        ext = Path(path).suffix or ".wav"
-        uid = f"{idx:07d}_{name}"
-        dest = wav_dir / f"{uid}{ext}"
-        try:
-            import shutil
-            shutil.copy2(path, str(dest))
-        except Exception:
-            skipped += 1
-            continue
-
-        valid.append({
-            "id": uid,
-            "file": f"wavs/{uid}{ext}",
-            "text": text,
-            "duration": round(dur, 3),
-        })
-
-        # Progress
-        if len(valid) % 100 == 0:
-            print(f"  {len(valid)} valid clips so far...", file=sys.stderr)
-
-    n_valid = len(valid)
-    if n_valid < args.min_samples:
-        print(f"❌ Only {n_valid} valid samples (need ≥{args.min_samples}). "
-              f"{skipped} skipped. Aborting.", file=sys.stderr)
-        return 1
-
-    # Write metadata
-    with open(Path(out_dir) / "manifest.jsonl", "w", encoding="utf-8") as f:
-        for r in valid:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    with open(Path(out_dir) / "metadata.jsonl", "w", encoding="utf-8") as f:
-        for r in valid:
-            f.write(
-                json.dumps({"audio": r["file"], "text": r["text"]}, ensure_ascii=False)
-                + "\n"
-            )
-
-    total_h = sum(r["duration"] for r in valid) / 3600
-    print(f"\n✅ {n_valid} clips · {total_h:.2f} h ({skipped} skipped) → {out_dir}",
-          file=sys.stderr)
+    print(f"\n✅ {summary['rows']} clips · {summary['hours']:.2f} h "
+          f"({summary['skipped']} skipped, "
+          f"{summary['duration_dropped']} dropped by duration)"
+          f" → {summary['out_dir']}", file=sys.stderr)
     print("   wavs/  manifest.jsonl  metadata.jsonl", file=sys.stderr)
 
     # Push
     if args.push is not None or args.dataset:
         push_repo = _push_repo(name, token, args.push, args.private)
         push_url = f"https://huggingface.co/datasets/{push_repo}"
-        _upload(out_dir, push_repo, token, msg=f"asr data: {n_valid} clips / {total_h:.2f}h")
+        _upload(out_dir, push_repo, token, msg=f"asr data: {summary['rows']} clips / {summary['hours']:.2f}h")
         print(f"   pushed to {push_url}", file=sys.stderr)
 
     return 0

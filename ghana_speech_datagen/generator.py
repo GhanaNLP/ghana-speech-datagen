@@ -420,6 +420,107 @@ def generate(
             "out_dir": out_dir, "run_id": run.run_id}
 
 
+def generate_asr(
+    *,
+    out_dir: str,
+    rows,
+    min_duration: float = 1.0,
+    max_duration: float = 30.0,
+    min_samples: int = 50,
+    sample_rate: int = DEFAULT_SR,
+    precision: str = "fp32",
+    cfg_value: float = 2.0,
+    steps: int = 10,
+    model_id: str = MODEL_ID,
+    token: str | None = None,
+    on_clip=None,
+    progress=None,
+) -> dict:
+    """Generate synthetic speech using each row's audio as voice reference.
+
+    ``rows`` is an iterable of ``(idx, text, ref_audio_path)`` tuples.
+    Each row generates audio with VoxCPM using its own reference audio as the
+    voice prompt. Output is ASR format (``metadata.jsonl`` with ``audio/text``).
+    """
+    out_dir = str(out_dir)
+    os.makedirs(os.path.join(out_dir, "wavs"), exist_ok=True)
+
+    model = load_instance(model_id, precision)
+    caches: dict = {}
+    valid = []
+    skipped = 0
+    duration_dropped = 0
+
+    for idx, text, ref_path in rows:
+        if not text or not ref_path:
+            skipped += 1
+            continue
+
+        # Resolve ref audio path
+        if isinstance(ref_path, dict):
+            path = ref_path.get("path", "")
+            if not path:
+                skipped += 1
+                continue
+        else:
+            path = str(ref_path)
+
+        try:
+            wav = _generate_one(model, caches, text, f"_asr_{idx}", cfg_value, steps,
+                                speakers={f"_asr_{idx}": {"wav": path, "text": text}})
+        except Exception:
+            skipped += 1
+            continue
+
+        wav = resample(wav, SAMPLE_RATE, int(sample_rate))
+        dur = float(len(wav)) / sample_rate
+
+        if dur < min_duration or dur > max_duration:
+            duration_dropped += 1
+            continue
+
+        uid = f"{idx:07d}_{uuid.uuid4().hex[:8]}"
+        rel = f"wavs/{uid}.wav"
+        out = os.path.join(out_dir, rel)
+        tmp = out + ".tmp"
+        sf.write(tmp, wav, int(sample_rate), subtype="PCM_16")
+        os.replace(tmp, out)
+
+        valid.append({
+            "id": uid,
+            "file": rel,
+            "text": text,
+            "duration": round(dur, 3),
+        })
+
+        if on_clip:
+            on_clip(dur)
+
+        if progress and len(valid) % 100 == 0:
+            progress(f"{len(valid)} valid clips so far...")
+
+    if len(valid) < min_samples:
+        raise RuntimeError(
+            f"Only {len(valid)} valid samples (need ≥{min_samples}). "
+            f"{skipped} skipped, {duration_dropped} dropped by duration. Aborting."
+        )
+
+    with open(Path(out_dir) / "manifest.jsonl", "w", encoding="utf-8") as f:
+        for r in valid:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    with open(Path(out_dir) / "metadata.jsonl", "w", encoding="utf-8") as f:
+        for r in valid:
+            f.write(
+                json.dumps({"audio": r["file"], "text": r["text"]}, ensure_ascii=False)
+                + "\n"
+            )
+
+    total_h = sum(r["duration"] for r in valid) / 3600
+    return {"rows": len(valid), "hours": total_h,
+            "skipped": skipped, "duration_dropped": duration_dropped,
+            "out_dir": out_dir}
+
+
 def preview(*, out_dir, dataset=None, text_column=None, texts=None, config=None,
             split="train", voices="custom", male_pct=50, sample_rate=DEFAULT_SR,
             precision="fp32", cfg_value=2.0, steps=10, n=5, max_chars=400,

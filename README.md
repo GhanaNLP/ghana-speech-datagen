@@ -89,11 +89,15 @@ ghana-speech-datagen tts --dataset org/ds --text text --hours 5 \
 # Resume: re-run the same command (finished rows are skipped)
 ```
 
-## Quickstart — ASR (repackage existing audio — no GPU)
+## Quickstart — ASR (generate audio with per-row voice references)
 
-Validate, filter, and repackage an existing audio-text dataset into ASR format
-(`metadata.jsonl`). No generation happens — just audio validation, copying, and
-manifest writing. Requires ≥50 valid samples by default.
+Synthesise speech using VoxCPM, using each input audio clip as the voice
+reference for its transcript. Output is ASR format (`metadata.jsonl`).
+**GPU required.**
+
+> Each row in the source dataset provides both the text to synthesise and the
+> reference audio that defines the voice. The model reproduces the same utterance
+> in a clean synthetic form — useful for augmenting ASR training data.
 
 ```bash
 # From an HF dataset with audio + text columns
@@ -102,7 +106,7 @@ ghana-speech-datagen asr --dataset org/audio-text-ds --audio-column audio --text
 # From a local directory of audio files + metadata
 ghana-speech-datagen asr --audio-dir my_clips/ --metadata transcripts.csv
 
-# Apply duration filtering and sub-sampling
+# Duration filtering and sub-sampling (validates generated clip lengths)
 ghana-speech-datagen asr --dataset org/audio-text-ds --audio-column audio \
     --text-column text --min-duration 2.0 --max-duration 25.0 --max-samples 2000
 
@@ -171,13 +175,16 @@ re-run the same command) and it reads `progress.json` and skips finished rows.
 | `--config` / `--split` | dataset config / split (default split `train`) |
 | `--audio-dir DIR` | local dir with audio files (use with `--metadata`) |
 | `--metadata PATH` | CSV/JSONL mapping audio filenames to transcripts |
-| `--min-duration` / `--max-duration` | drop clips outside this range (seconds) |
+| `--min-duration` / `--max-duration` | drop generated clips outside this range (seconds) |
 | `--max-samples N` | randomly pick at most this many rows from source |
 | `--min-samples N` | minimum valid samples required (default 50) |
+| `--sample-rate HZ` | output WAV rate (default 22050) |
+| `--precision fp32\|fp16\|bf16` | model precision (default fp32) |
+| `--cfg` / `--steps` | CFG value / inference timesteps |
 | `--name` / `--out` | run name (→ `data/<name>`) or explicit output dir |
 | `--push REPO` | upload the finished run to an HF dataset repo (public) |
 | `--private` | make the pushed repo private instead |
-| `--token` | HF token — for pushing / gated datasets |
+| `--token` | HF token — for gated datasets/models |
 
 ## Performance & GPU
 
