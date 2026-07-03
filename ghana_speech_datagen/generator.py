@@ -24,6 +24,30 @@ import soundfile as sf
 os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
 os.environ.setdefault("MODELSCOPE_CACHE", "/tmp/modelscope_cache")
 
+# --------------------------------------------------------------------------- #
+# Monkey-patch: torchaudio 2.10+ hardcodes torchcodec which needs libnvrtc.so.13
+# and often fails in non-standard envs (H200 + CUDA 12.8).  Use soundfile for
+# WAV loading instead — it is simpler and faster for local 16-bit PCM.
+# --------------------------------------------------------------------------- #
+try:
+    import torch
+    import torchaudio
+    _torchaudio_load = torchaudio.load
+
+    def _torchaudio_load_sf(path, *args, **kwargs):
+        try:
+            data, sr = sf.read(str(path))
+            tensor = torch.from_numpy(data)
+            if tensor.ndim > 1:
+                tensor = tensor.mean(dim=1)
+            return tensor.unsqueeze(0).float(), sr
+        except Exception:
+            return _torchaudio_load(path, *args, **kwargs)
+
+    torchaudio.load = _torchaudio_load_sf
+except ImportError:
+    pass
+
 MODEL_ID = "ghananlpcommunity/ghana-tts-36k"
 SAMPLE_RATE = 16000      # native rate the model synthesises at
 DEFAULT_SR = 22050       # default OUTPUT rate (TTS-friendly); override with --sample-rate
