@@ -3,14 +3,14 @@
 Generate synthetic speech training data (TTS / ASR) from a text dataset. Examples:
 
     # Preview 5 clips before a big run (needs a GPU)
-    ghana-speech-datagen --dataset ghananlpcommunity/some-text --text-column text --preview 5
+    ghana-speech-datagen --dataset ghananlpcommunity/some-text --text text --preview 5
 
     # Generate 5 hours, 50/50 male/female, into data/<name>
-    ghana-speech-datagen --dataset ghananlpcommunity/some-text --text-column text \\
+    ghana-speech-datagen --dataset ghananlpcommunity/some-text --text text \\
         --hours 5 --name twi-run
 
     # Data is auto-pushed to your HF account every 200 rows (no loss on crash)
-    ghana-speech-datagen --dataset … --text-column text --hours 5 --name twi-run
+    ghana-speech-datagen --dataset … --text text --hours 5 --name twi-run
 
 The model is **private** — set HF_TOKEN in your environment or pass --token.
 Data is automatically pushed to a dataset repo on your HF account as it's
@@ -39,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     src.add_argument("--dataset", help="source text dataset id on the HF Hub")
     src.add_argument("--config", help="dataset config (optional)")
     src.add_argument("--split", default="train")
-    src.add_argument("--text-column", help="column holding the text (with --dataset)")
+    src.add_argument("--text", dest="text_column", help="column holding the text to synthesise (with --dataset)")
     src.add_argument("--text-file", help="path to a .txt file with one sentence per line")
     src.add_argument("--max-chars", type=int, default=400, help="skip rows longer than this")
 
@@ -89,6 +89,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="custom female reference WAV (transcript: sibling .txt file)")
     spk.add_argument("--speaker-female-text",
                      help="female prompt transcript (skip if using sibling .txt)")
+    spk.add_argument("--ref-text",
+                     help="reference audio text for both male/female speakers (overrides .txt files)")
 
     misc = p.add_argument_group("misc")
     misc.add_argument("--preview", type=int, metavar="N",
@@ -105,17 +107,23 @@ def _build_speakers(args) -> dict | None:
         d = Path(args.speaker_dir)
         overrides["male"] = {"wav": str(d / "male.wav"), "txt": d / "male.txt"}
         overrides["female"] = {"wav": str(d / "female.wav"), "txt": d / "female.txt"}
+        if args.ref_text:
+            overrides["male"]["text"] = args.ref_text
+            overrides["female"]["text"] = args.ref_text
         return overrides
     if args.speaker_male:
         m: dict = {"wav": args.speaker_male}
-        if args.speaker_male_text:
-            m["text"] = args.speaker_male_text
+        if args.speaker_male_text or args.ref_text:
+            m["text"] = args.speaker_male_text or args.ref_text
         overrides["male"] = m
     if args.speaker_female:
         f: dict = {"wav": args.speaker_female}
-        if args.speaker_female_text:
-            f["text"] = args.speaker_female_text
+        if args.speaker_female_text or args.ref_text:
+            f["text"] = args.speaker_female_text or args.ref_text
         overrides["female"] = f
+    if args.ref_text and not overrides:
+        overrides["male"] = {"text": args.ref_text}
+        overrides["female"] = {"text": args.ref_text}
     return overrides or None
 
 
@@ -149,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.dataset and args.text_column:
         default_name = sanitize_name(args.dataset.split("/")[-1])
     else:
-        sys.exit("Provide --text-file PATH, or --dataset ID with --text-column COL (see --help).")
+        sys.exit("Provide --text-file PATH, or --dataset ID with --text COL (see --help).")
 
     from . import generator
 

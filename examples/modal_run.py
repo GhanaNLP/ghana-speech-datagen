@@ -2,7 +2,7 @@
 
 Usage:
     export MODAL_TOKEN_ID=... MODAL_TOKEN_SECRET=...
-    modal run examples/modal_run.py --dataset ghananlpcommunity/some-text --text-column text --hours 2
+    modal run examples/modal_run.py --dataset ghananlpcommunity/some-text --text text --hours 2
 
 Required secrets:
     hf-token   Hugging Face token (read access to the private model)
@@ -58,7 +58,7 @@ def run(
     argv = [
         "ghana-speech-datagen",
         "--dataset", dataset,
-        "--text-column", text_column,
+        "--text", text_column,
         "--split", split,
         "--hours", str(hours),
         "--name", name,

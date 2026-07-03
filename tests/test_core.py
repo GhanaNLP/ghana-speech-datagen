@@ -112,8 +112,10 @@ def test_export_formats(tmp_path):
 
 
 def test_cli_speaker_args():
-    a = cli.build_parser().parse_args(["--text-file", "s.txt", "--speaker-dir", "/speakers"])
+    a = cli.build_parser().parse_args(["--text-file", "s.txt", "--speaker-dir", "/speakers",
+                                       "--ref-text", "hello"])
     assert a.speaker_dir == "/speakers"
+    assert a.ref_text == "hello"
     b = cli.build_parser().parse_args(
         ["--text-file", "s.txt", "--speaker-male", "m.wav", "--speaker-female", "f.wav"])
     assert b.speaker_male == "m.wav" and b.speaker_female == "f.wav"
@@ -126,12 +128,40 @@ def test_cli_build_speakers():
         speaker_male_text = "male prompt"
         speaker_female = "/custom/f.wav"
         speaker_female_text = None
+        ref_text = None
     spk = cli._build_speakers(Args())
     assert spk["male"]["wav"] == "/custom/m.wav"
     assert spk["male"]["text"] == "male prompt"
     assert spk["female"]["wav"] == "/custom/f.wav"
     # female text should be None (will be resolved by resolve_speakers later)
     assert "text" not in spk["female"]
+
+
+def test_build_speakers_ref_text():
+    class Args:
+        speaker_dir = None
+        speaker_male = None
+        speaker_male_text = None
+        speaker_female = None
+        speaker_female_text = None
+        ref_text = "shared prompt"
+    spk = cli._build_speakers(Args())
+    assert spk is not None
+    assert spk["male"]["text"] == "shared prompt"
+    assert spk["female"]["text"] == "shared prompt"
+
+
+def test_build_speakers_ref_text_with_explicit_male_text():
+    class Args:
+        speaker_dir = None
+        speaker_male = "/m.wav"
+        speaker_male_text = "male prompt"
+        speaker_female = "/f.wav"
+        speaker_female_text = None
+        ref_text = "shared prompt"
+    spk = cli._build_speakers(Args())
+    assert spk["male"]["text"] == "male prompt"   # explicit wins
+    assert spk["female"]["text"] == "shared prompt"  # ref_text as fallback
 
 
 def test_generate_params():
@@ -155,7 +185,7 @@ def test_cli_token_required():
 
 def test_cli_parser_and_requirements():
     a = cli.build_parser().parse_args(
-        ["--dataset", "org/ds", "--text-column", "text", "--hours", "5",
+        ["--dataset", "org/ds", "--text", "text", "--hours", "5",
          "--voices", "custom", "--male-pct", "60", "--name", "run1",
          "--format", "ljspeech,asr", "--max-samples", "500",
          "--min-duration", "1.0", "--max-duration", "15.0"])
@@ -167,6 +197,9 @@ def test_cli_parser_and_requirements():
     assert a.max_duration == 15.0
 
     assert cli.build_parser().parse_args(["--text-file", "s.txt"]).text_file == "s.txt"
+
+    b = cli.build_parser().parse_args(["--text-file", "s.txt", "--ref-text", "my prompt"])
+    assert b.ref_text == "my prompt"
 
     # Should exit with source error when token IS set but no source is given
     try:

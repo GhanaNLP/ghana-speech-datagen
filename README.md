@@ -25,7 +25,7 @@ Pick a **GPU** runtime (`Runtime → Change runtime type → GPU`).
 
 ```bash
 pip install modal
-modal run examples/modal_run.py --dataset ghananlpcommunity/your-text-dataset --text-column text --hours 2
+modal run examples/modal_run.py --dataset ghananlpcommunity/your-text-dataset --text text --hours 2
 ```
 
 Requires a `hf-token` Modal secret with your Hugging Face token. See [`examples/modal_run.py`](examples/modal_run.py) for all options.
@@ -48,24 +48,24 @@ pip install -e .                        # gives you the `ghana-speech-datagen` c
 Source is **either** an HF dataset column **or** a plain text file (one sentence
 per line). Output is written in **LJSpeech** (TTS) or **ASR** format (`--format`).
 
-> `--text-column` names the column in the HF dataset that holds the sentences
-> to be turned into speech. For example, `--text-column text` means the dataset's
+> `--text` names the column in the HF dataset that holds the sentences
+> to be turned into speech. For example, `--text text` means the dataset's
 > `"text"` column contains the prompts. You can point at any dataset on the Hub
 > — just tell it which column has the text.
 
 ```bash
 # Preview 5 clips first (hear it before a big run)
-ghana-speech-datagen --dataset ghananlpcommunity/your-text-dataset --text-column text --preview 5
+ghana-speech-datagen --dataset ghananlpcommunity/your-text-dataset --text text --preview 5
 
 # From an HF dataset → 5 h, LJSpeech layout (default), into data/<name>
-ghana-speech-datagen --dataset ghananlpcommunity/your-text-dataset --text-column text \
+ghana-speech-datagen --dataset ghananlpcommunity/your-text-dataset --text text \
     --hours 5 --name twi-run --format ljspeech
 
 # From your own sentences (one per line) → ASR format (audio + text)
 ghana-speech-datagen --text-file sentences.txt --hours 2 --format asr
 
 # Randomly sample 5000 texts from a large dataset, both formats
-ghana-speech-datagen --dataset org/big-text --text-column text --max-samples 5000 \
+ghana-speech-datagen --dataset org/big-text --text text --max-samples 5000 \
     --hours 3 --format ljspeech,asr
 
 # Resume: re-run the same command (finished rows are skipped)
@@ -89,7 +89,7 @@ data/twi-run/
 
 | flag | meaning |
 |------|---------|
-| `--dataset ID` / `--text-column COL` | source: an HF dataset column |
+| `--dataset ID` / `--text COL` | source: an HF dataset column |
 | `--text-file PATH` | source: a .txt file, one sentence per line |
 | `--config` / `--split` | dataset config / split (default split `train`) |
 | `--hours H` | target hours of audio to generate |
