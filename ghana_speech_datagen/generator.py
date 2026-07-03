@@ -310,7 +310,7 @@ def _worker(run: _Run, model_id: str):
             uid = f"{idx:07d}_{run.run_id}"
             rel = f"wavs/{uid}.wav"
             out = os.path.join(run.wav_dir, f"{uid}.wav")
-            tmp = out + ".tmp"
+            tmp = out + ".tmp.wav"
             sf.write(tmp, wav, run.sample_rate, subtype="PCM_16")
             os.replace(tmp, out)
             with run.lock:
@@ -549,7 +549,7 @@ def generate_asr(
         uid = f"{idx:07d}_{uuid.uuid4().hex[:8]}"
         rel = f"wavs/{uid}.wav"
         out = os.path.join(wav_dir, f"{uid}.wav")
-        tmp = out + ".tmp"
+        tmp = out + ".tmp.wav"
         sf.write(tmp, wav, int(sample_rate), subtype="PCM_16")
         os.replace(tmp, out)
 
