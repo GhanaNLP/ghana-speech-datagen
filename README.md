@@ -1,4 +1,4 @@
-# Ghana TTS DataGen — synthetic speech data generator
+# Ghana TTS DataGen
 
 Turn a **text dataset** into **synthetic TTS training audio** — streamed through
 the Ghana NLP Community VoxCPM model (`ghana-tts-36k`), voice-cloning built-in
@@ -38,7 +38,7 @@ pip install -e .                        # gives you the `ghana-tts-datagen` comm
 ## Quickstart
 
 Source is **either** an HF dataset column **or** a plain text file (one sentence
-per line). Output is written in your chosen **TTS format** (`--formats`).
+per line). Output is written in **LJSpeech** (TTS) or **ASR** format (`--format`).
 
 ```bash
 # Preview 5 clips first (hear it before a big run)
@@ -46,19 +46,20 @@ ghana-tts-datagen --dataset ghananlpcommunity/your-text-dataset --text-column te
 
 # From an HF dataset → 5 h, LJSpeech layout (default), into data/<name>
 ghana-tts-datagen --dataset ghananlpcommunity/your-text-dataset --text-column text \
-    --hours 5 --name twi-run --formats ljspeech
+    --hours 5 --name twi-run --format ljspeech
 
-# From your own sentences (one per line) → a Piper dataset
-ghana-tts-datagen --text-file sentences.txt --hours 2 --formats piper
+# From your own sentences (one per line) → ASR format (audio + text + description)
+ghana-tts-datagen --text-file sentences.txt --hours 2 --format asr \
+    --asr-audio-col audio --asr-text-col text --asr-description-col description
 
-# Multiple formats at once, then push to your HF repo
-ghana-tts-datagen --text-file sentences.txt --hours 2 --formats ljspeech,vits,melo \
-    --lang TWI --push you/my-synth
+# Randomly sample 5000 texts from a large dataset, both formats
+ghana-tts-datagen --dataset org/big-text --text-column text --max-samples 5000 \
+    --hours 3 --format ljspeech,asr
 
-# Resume: re-run the same command — finished rows are skipped
+# Resume: re-run the same command (finished rows are skipped)
 ```
 
-## Output — ready for your TTS trainer
+## Output
 
 Everything lands in `data/<name>/` (override with `--out`):
 
@@ -67,15 +68,10 @@ data/twi-run/
   wavs/<id>.wav            mono, silence-trimmed, at --sample-rate (default 22050)
   manifest.jsonl           full info: id, file, text, gender, speaker, duration
   progress.json            resume state (re-run to continue)
-  # + the manifest(s) for the formats you asked for:
+  # + the manifest(s) for the format(s) you asked for:
   metadata.csv             ljspeech  →  id|text|text
-  metadata.piper.csv       piper     →  id|speaker|text   (metadata.csv if piper only)
-  filelist.txt, speakers.txt   vits  →  wavs/<id>.wav|sid|text
-  metadata.list            melo      →  wavs/<id>.wav|speaker|LANG|text
+  metadata.jsonl           asr       →  {"audio":"...","text":"...","description":"..."}
 ```
-
-Point your framework's data-prep at this folder — `wavs/` + the matching manifest
-is exactly what LJSpeech/Coqui, Piper, VITS, and MeloTTS expect.
 
 ## Options
 
@@ -92,8 +88,10 @@ is exactly what LJSpeech/Coqui, Piper, VITS, and MeloTTS expect.
 | `--precision fp32\|fp16\|bf16` | model precision (default fp32) — see Performance |
 | `--instances N` | parallel model instances (default: auto by VRAM) |
 | `--cfg` / `--steps` | CFG value / inference timesteps |
-| `--formats …` | TTS manifests to write: `ljspeech,piper,vits,melo` (default `ljspeech`) |
-| `--lang CODE` | language code for the `melo` manifest |
+| `--max-samples N` | randomly pick at most this many texts (sub-sample) |
+| `--min-duration` / `--max-duration` | skip clips shorter/longer than these (seconds) |
+| `--format` | export format(s): `ljspeech`, `asr`, or both (default `ljspeech`) |
+| `--asr-audio-col` / `--asr-text-col` / `--asr-description-col` | column names in ASR `metadata.jsonl` |
 | `--name` / `--out` | run name (→ `data/<name>`) or explicit output dir |
 | `--push REPO [--private]` | upload the finished run to an HF dataset repo |
 | `--token` | HF token (else `HF_TOKEN` env) — for gated datasets/models |
@@ -124,9 +122,12 @@ re-run the same command) and it reads `progress.json` and skips finished rows.
 from ghana_tts_datagen import generate, export_formats
 
 summary = generate(out_dir="data/run", dataset="org/ds", text_column="text",
-                   target_hours=5, voices="custom", male_pct=50)
-export_formats("data/run", ["ljspeech", "vits"], lang="TWI")
+                   target_hours=5, voices="custom", male_pct=50,
+                   max_samples=10000)
+export_formats("data/run", ["ljspeech", "asr"],
+               audio_column="audio", text_column="text", description_column="description")
 print(summary)
+# {'rows': ..., 'hours': ..., 'errors': ..., 'duration_dropped': ...}
 ```
 
 ## Tests
@@ -141,7 +142,7 @@ pytest tests/
 ```
 ghana_tts_datagen/
   cli.py             the `ghana-tts-datagen` command
-  generator.py       voice-clone, silence-trim, parallel run, resume, TTS-format export
+  generator.py       voice-clone, silence-trim, parallel run, resume, format export
   speakers/          built-in male/female reference wav + text
 notebooks/ghana_tts_datagen.ipynb   Colab (GPU) runner
 tests/

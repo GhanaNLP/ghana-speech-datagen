@@ -75,6 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="column name for audio paths in ASR metadata (default: audio)")
     out.add_argument("--asr-text-col", dest="asr_text_col", default="text",
                      help="column name for transcripts in ASR metadata (default: text)")
+    out.add_argument("--asr-description-col", dest="asr_description_col", default="description",
+                     help="column name for description in ASR metadata (default: description)")
     out.add_argument("--save-every", type=int, default=200, help="write manifest every N rows")
     out.add_argument("--push", metavar="REPO_ID",
                      help="override auto-generated HF dataset repo (default: <user>/ghana-tts-synth-<name>)")
@@ -223,7 +225,8 @@ def main(argv: list[str] | None = None) -> int:
     fmts = [f.strip() for f in (args.format or "").split(",") if f.strip()]
     written = generator.export_formats(out_dir, fmts,
                                        audio_column=args.asr_audio_col,
-                                       text_column=args.asr_text_col) if fmts else []
+                                       text_column=args.asr_text_col,
+                                       description_column=args.asr_description_col) if fmts else []
 
     dropped = summary.get("duration_dropped", 0)
     print(f"\n✅ {summary['rows']} clips · {summary['hours']:.2f} h "

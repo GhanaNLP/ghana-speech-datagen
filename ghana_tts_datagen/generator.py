@@ -464,12 +464,13 @@ def _manifest_text(s: str) -> str:
 def export_formats(out_dir: str, formats,
                   lang: str | None = None,
                   audio_column: str = "audio",
-                  text_column: str = "text") -> list[str]:
+                  text_column: str = "text",
+                  description_column: str = "description") -> list[str]:
     """Write standard-formatted manifests for an existing run (beside ``wavs/``).
 
     Reads ``manifest.jsonl`` and emits, per requested format:
       * ``ljspeech`` → ``metadata.csv``  ``id|text|text`` (TTS)
-      * ``asr``      → ``metadata.jsonl``  ``{"audio": "wavs/...", "text": "..."}``
+      * ``asr``      → ``metadata.jsonl``  ``{"audio": "wavs/...", "text": "...", "description": "..."}``
                                                  (ASR; column names configurable)
     Returns the paths written.
     """
@@ -493,6 +494,7 @@ def export_formats(out_dir: str, formats,
     if "asr" in fmts:
         _write("metadata.jsonl",
                [json.dumps({audio_column: r["file"],
-                            text_column: _manifest_text(r["text"])})
+                            text_column: _manifest_text(r["text"]),
+                            description_column: _manifest_text(r["text"])})
                 for r in rows])
     return written

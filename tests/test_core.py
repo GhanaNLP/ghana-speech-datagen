@@ -107,8 +107,8 @@ def test_export_formats(tmp_path):
         ["0000000_ab", "hello there", "hello there"]
 
     asr = [json.loads(l) for l in (run / "metadata.jsonl").read_text().splitlines() if l.strip()]
-    assert asr[0] == {"audio": "wavs/0000000_ab.wav", "text": "hello there"}
-    assert asr[1] == {"audio": "wavs/0000001_ab.wav", "text": "good morning"}
+    assert asr[0] == {"audio": "wavs/0000000_ab.wav", "text": "hello there", "description": "hello there"}
+    assert asr[1] == {"audio": "wavs/0000001_ab.wav", "text": "good morning", "description": "good morning"}
 
 
 def test_export_formats_asr_custom_columns(tmp_path):
@@ -124,9 +124,10 @@ def test_export_formats_asr_custom_columns(tmp_path):
     (run / "manifest.jsonl").write_text(
         "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
 
-    export_formats(str(run), ["asr"], audio_column="wav_path", text_column="transcript")
+    export_formats(str(run), ["asr"], audio_column="wav_path", text_column="transcript",
+                   description_column="desc")
     entry = json.loads((run / "metadata.jsonl").read_text().splitlines()[0])
-    assert entry == {"wav_path": "wavs/0000000_ab.wav", "transcript": "hello"}
+    assert entry == {"wav_path": "wavs/0000000_ab.wav", "transcript": "hello", "desc": "hello"}
 
 
 def test_cli_speaker_args():
