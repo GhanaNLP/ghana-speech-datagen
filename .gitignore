@@ -11,3 +11,4 @@ venv/
 # IDE
 .vscode/
 .idea/
+twi_asr_texts.txt

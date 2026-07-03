@@ -491,20 +491,18 @@ def generate_asr(
     duration_dropped = 0
     total_sec = 0.0
 
-    for idx, (text, ref_path, ref_text) in enumerate(pairs):
+    for idx, (text, audio_input, ref_text) in enumerate(pairs):
         if total_sec >= target_seconds:
             break
-        if not text or not ref_path:
+        if not text or not audio_input:
             skipped += 1
             continue
 
-        if isinstance(ref_path, dict):
-            path = ref_path.get("path", "")
-            if not path:
-                skipped += 1
-                continue
-        else:
-            path = str(ref_path)
+        try:
+            path = normalize_audio(audio_input, out_dir)
+        except Exception:
+            skipped += 1
+            continue
 
         try:
             wav = _generate_one(model, {}, text, f"_asr_{idx}", cfg_value, steps,
