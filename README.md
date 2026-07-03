@@ -150,7 +150,8 @@ data/my-repo/
 | `--max-samples N` | randomly pick at most this many texts (sub-sample) |
 | `--min-duration` / `--max-duration` | skip clips shorter/longer than these (seconds) |
 | `--name` / `--out` | run name (→ `data/<name>`) or explicit output dir |
-| `--push REPO [--private]` | upload the finished run to an HF dataset repo |
+| `--push REPO` | upload the finished run to an HF dataset repo (public) |
+| `--private` | make the pushed repo private instead |
 | `--token` | HF token — for gated datasets/models |
 | `--preview N` | generate N preview clips and exit |
 | `--list-datasets` | list datasets under the `ghananlpcommunity` org |
@@ -174,7 +175,8 @@ re-run the same command) and it reads `progress.json` and skips finished rows.
 | `--max-samples N` | randomly pick at most this many rows from source |
 | `--min-samples N` | minimum valid samples required (default 50) |
 | `--name` / `--out` | run name (→ `data/<name>`) or explicit output dir |
-| `--push REPO [--private]` | upload the finished run to an HF dataset repo |
+| `--push REPO` | upload the finished run to an HF dataset repo (public) |
+| `--private` | make the pushed repo private instead |
 | `--token` | HF token — for pushing / gated datasets |
 
 ## Performance & GPU
