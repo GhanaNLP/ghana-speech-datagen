@@ -2,7 +2,7 @@
 
 Subcommands:
   tts   Generate synthetic speech from text (needs GPU)
-  asr   Prepare ASR training data from existing audio+text (no GPU needed)
+  asr   Generate synthetic speech from text using reference audio pool (needs GPU)
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ import random
 import sys
 from pathlib import Path
 
+import soundfile as sf
+
 from .generator import DEFAULT_SR, MODEL_ID, sanitize_name
 
 DATASET_ORG = "ghananlpcommunity"
@@ -24,6 +26,34 @@ MIN_ASR_SAMPLES = 50
 # --------------------------------------------------------------------------- #
 # Shared helpers
 # --------------------------------------------------------------------------- #
+
+DEFAULT_MIN_REF_DURATION = 1.0
+DEFAULT_MAX_REF_DURATION = 15.0
+
+
+def _validate_ref_duration(duration: float, label: str,
+                            min_dur: float | None, max_dur: float | None):
+    if min_dur is not None and duration < min_dur:
+        sys.exit(f"Reference audio '{label}' is {duration:.1f}s (minimum {min_dur}s). "
+                 f"Use a longer clip or lower --min-ref-duration.")
+    if max_dur is not None and duration > max_dur:
+        sys.exit(f"Reference audio '{label}' is {duration:.1f}s (maximum {max_dur}s). "
+                 f"Use a shorter clip or raise --max-ref-duration.")
+
+
+def _get_audio_duration(audio) -> float:
+    """Return duration in seconds from an HF audio dict or file path."""
+    if isinstance(audio, dict):
+        arr = audio.get("array")
+        sr = audio.get("sampling_rate")
+        if arr is not None and sr:
+            return float(len(arr)) / float(sr)
+        path = audio.get("path", "")
+        if path:
+            return float(sf.info(path).duration)
+        raise ValueError("Cannot determine duration from audio dict")
+    return float(sf.info(str(audio)).duration)
+
 
 def _resolve_token(args) -> str:
     tok = args.token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
@@ -125,6 +155,10 @@ def build_parser() -> argparse.ArgumentParser:
     tts_spk.add_argument("--ref-text",
                          help="fallback prompt text for all custom speakers "
                               "(ignored when a speaker has its own <id>.txt)")
+    tts_spk.add_argument("--min-ref-duration", type=float, default=DEFAULT_MIN_REF_DURATION,
+                         help=f"minimum ref audio duration in seconds (default {DEFAULT_MIN_REF_DURATION})")
+    tts_spk.add_argument("--max-ref-duration", type=float, default=DEFAULT_MAX_REF_DURATION,
+                         help=f"maximum ref audio duration in seconds (default {DEFAULT_MAX_REF_DURATION})")
 
     tts_misc = tts.add_argument_group("misc")
     tts_misc.add_argument("--preview", type=int, metavar="N",
@@ -155,6 +189,10 @@ def build_parser() -> argparse.ArgumentParser:
                          help="local dir with reference audio files (use with --ref-metadata)")
     asr_ref.add_argument("--ref-metadata",
                          help="CSV/JSONL mapping ref audio filenames to transcripts")
+    asr_ref.add_argument("--min-ref-duration", type=float, default=DEFAULT_MIN_REF_DURATION,
+                         help=f"minimum ref audio duration in seconds (default {DEFAULT_MIN_REF_DURATION})")
+    asr_ref.add_argument("--max-ref-duration", type=float, default=DEFAULT_MAX_REF_DURATION,
+                         help=f"maximum ref audio duration in seconds (default {DEFAULT_MAX_REF_DURATION})")
 
     asr_val = asr.add_argument_group("generation")
     asr_val.add_argument("--hours", type=float, default=1.0, help="target hours of audio")
@@ -205,6 +243,12 @@ def _build_speakers(args) -> dict | None:
     overrides: dict = {}
     for wav_path in sorted(d.glob("*.wav")):
         spk_id = wav_path.stem
+        try:
+            dur = sf.info(str(wav_path)).duration
+        except Exception:
+            sys.exit(f"Speaker '{spk_id}': {wav_path.name} is not a valid WAV file.")
+        _validate_ref_duration(dur, spk_id,
+                               args.min_ref_duration, args.max_ref_duration)
         txt_path = wav_path.with_suffix(".txt")
         text = txt_path.read_text(encoding="utf-8").strip() if txt_path.exists() else (args.ref_text or "")
         if not text:
@@ -323,7 +367,8 @@ def _load_texts(dataset: str | None, text_column: str | None,
 
 def _load_refs_from_dataset(dataset: str, audio_col: str, text_col: str,
                              config: str | None, split: str,
-                             max_samples: int | None, token: str):
+                             max_samples: int | None, token: str,
+                             min_dur: float, max_dur: float) -> list:
     from datasets import load_dataset
     ds = load_dataset(dataset, config or None, split=split, streaming=True, token=token)
     if max_samples:
@@ -334,14 +379,24 @@ def _load_refs_from_dataset(dataset: str, audio_col: str, text_col: str,
         text = ex.get(text_col)
         if audio is None or text is None:
             continue
-        refs.append((audio, str(text).strip()))
+        text = str(text).strip()
+        try:
+            dur = _get_audio_duration(audio)
+        except Exception:
+            continue
+        try:
+            _validate_ref_duration(dur, f"{dataset}#{ex.get('id', '?')}", min_dur, max_dur)
+        except SystemExit:
+            continue  # silently skip out-of-range refs
+        refs.append((audio, text))
     if not refs:
         sys.exit(f"No valid reference audio+text pairs found in {dataset}.")
     return refs
 
 
 def _load_refs_from_local(audio_dir: str, metadata_path: str,
-                           max_samples: int | None) -> list:
+                           max_samples: int | None,
+                           min_dur: float, max_dur: float) -> list:
     audio_dir = Path(audio_dir)
     meta = Path(metadata_path)
     rows = []
@@ -362,7 +417,18 @@ def _load_refs_from_local(audio_dir: str, metadata_path: str,
         audio_path = row.get("audio") or row.get("file") or row.get("path", "")
         text = row.get("text") or row.get("transcript") or row.get("sentence", "")
         if audio_path and text:
-            refs.append((str(audio_dir / audio_path), text.strip()))
+            full_path = str(audio_dir / audio_path)
+            if not os.path.isfile(full_path):
+                continue
+            try:
+                dur = sf.info(full_path).duration
+            except Exception:
+                continue
+            try:
+                _validate_ref_duration(dur, audio_path, min_dur, max_dur)
+            except SystemExit:
+                continue
+            refs.append((full_path, text.strip()))
     if not refs:
         sys.exit(f"No valid reference audio+text pairs found in {audio_dir}.")
     return refs
@@ -380,10 +446,12 @@ def _cmd_asr(args):
         refs = _load_refs_from_dataset(
             args.ref_dataset, args.audio_column, args.ref_text_column,
             args.ref_config, args.ref_split, None, token,
+            args.min_ref_duration, args.max_ref_duration,
         )
         default_name = sanitize_name(args.ref_dataset.split("/")[-1])
     elif args.ref_audio_dir and args.ref_metadata:
-        refs = _load_refs_from_local(args.ref_audio_dir, args.ref_metadata, None)
+        refs = _load_refs_from_local(args.ref_audio_dir, args.ref_metadata, None,
+                                     args.min_ref_duration, args.max_ref_duration)
         default_name = sanitize_name(os.path.basename(args.ref_audio_dir.rstrip("/")))
     else:
         sys.exit("Provide --ref-dataset or --ref-audio-dir + --ref-metadata.")

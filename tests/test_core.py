@@ -4,11 +4,18 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import soundfile as sf
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ghana_speech_datagen import clean_text, pick_gender, pick_speaker, sanitize_name, trim_silences, SPEAKERS, resolve_speakers
 from ghana_speech_datagen import cli
+
+
+def _dummy_wav(path, sr=16000, duration=3.0):
+    """Write a tiny valid WAV file."""
+    t = np.linspace(0, duration, int(sr * duration), endpoint=False)
+    sf.write(str(path), (np.sin(2 * np.pi * 440 * t) * 0.3).astype(np.float32), sr)
 
 
 def test_clean_text():
@@ -130,17 +137,19 @@ def test_cli_speaker_args():
 
 def test_cli_build_speakers(tmp_path):
     wav1 = tmp_path / "speaker1.wav"
-    wav1.touch()
+    _dummy_wav(wav1)
     txt1 = tmp_path / "speaker1.txt"
     txt1.write_text("prompt one", encoding="utf-8")
     wav2 = tmp_path / "speaker2.wav"
-    wav2.touch()
+    _dummy_wav(wav2)
     txt2 = tmp_path / "speaker2.txt"
     txt2.write_text("prompt two", encoding="utf-8")
 
     class Args:
         speaker_dir = str(tmp_path)
         ref_text = None
+        min_ref_duration = 1.0
+        max_ref_duration = 15.0
     spk = cli._build_speakers(Args())
     assert set(spk) == {"speaker1", "speaker2"}
     assert spk["speaker1"]["wav"] == str(wav1)
@@ -151,10 +160,12 @@ def test_cli_build_speakers(tmp_path):
 
 def test_build_speakers_ref_text(tmp_path):
     wav = tmp_path / "alice.wav"
-    wav.touch()
+    _dummy_wav(wav)
     class Args:
         speaker_dir = str(tmp_path)
         ref_text = "shared prompt"
+        min_ref_duration = 1.0
+        max_ref_duration = 15.0
     spk = cli._build_speakers(Args())
     assert spk["alice"]["text"] == "shared prompt"
 

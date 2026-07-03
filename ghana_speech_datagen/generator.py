@@ -82,6 +82,44 @@ def trim_silences(wav, sr=SAMPLE_RATE, top_db=SILENCE_TOP_DB, max_gap_s=SILENCE_
     return np.concatenate(pieces)
 
 
+VOCPM_SR = 16000
+
+
+def normalize_audio(audio_input, out_dir: str) -> str:
+    """Read audio (HF dict or path), convert to 16 kHz mono 16-bit WAV, return path.
+
+    Writes to ``out_dir/_normalized/<hash>.wav`` so repeated calls are cached.
+    """
+    import hashlib, librosa
+
+    os.makedirs(os.path.join(out_dir, "_normalized"), exist_ok=True)
+
+    if isinstance(audio_input, dict):
+        arr = audio_input.get("array")
+        sr = audio_input.get("sampling_rate", VOCPM_SR)
+        if arr is None:
+            arr, sr = librosa.load(audio_input.get("path", ""), sr=VOCPM_SR, mono=True)
+        else:
+            arr = np.asarray(arr, dtype=np.float32)
+            if arr.ndim > 1:
+                arr = arr.mean(axis=1)
+            if sr != VOCPM_SR:
+                arr = librosa.resample(arr, orig_sr=int(sr), target_sr=VOCPM_SR)
+        h = hashlib.sha256(arr.tobytes()).hexdigest()[:16]
+    else:
+        p = str(audio_input)
+        h = hashlib.sha256(p.encode()).hexdigest()[:16]
+
+    out_path = os.path.join(out_dir, "_normalized", f"{h}.wav")
+    if not os.path.isfile(out_path):
+        arr, _ = librosa.load(str(audio_input) if not isinstance(audio_input, dict) else audio_input.get("path", ""),
+                              sr=VOCPM_SR, mono=True)
+        tmp = out_path + ".tmp"
+        sf.write(tmp, arr, VOCPM_SR, subtype="PCM_16")
+        os.replace(tmp, out_path)
+    return out_path
+
+
 def resample(wav, src_sr: int, dst_sr: int):
     """Resample a mono float array from ``src_sr`` to ``dst_sr`` (no-op if equal)."""
     wav = np.asarray(wav, dtype=np.float32)

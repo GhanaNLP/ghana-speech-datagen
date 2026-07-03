@@ -9,8 +9,7 @@ it left off.
 > **A GPU is required** for usable speed (VoxCPM is a neural TTS model; ~4.5 GB
 > VRAM per instance). Instances are auto-sized from your GPU's VRAM.
 >
-> No GPU? Use the **Colab** or **Modal** runners below, or the `asr` subcommand
-> (repackages existing audio — no GPU needed).
+> No GPU? Use the **Colab** or **Modal** runners below.
 
 ## Supported languages
 
