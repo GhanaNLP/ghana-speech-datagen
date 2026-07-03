@@ -7,10 +7,10 @@ and resume.
 
 from .generator import (
     DEFAULT_SR,
+    EXPORT_FORMATS,
     MODEL_ID,
     SAMPLE_RATE,
     SPEAKERS,
-    TTS_FORMATS,
     auto_instances,
     clean_text,
     export_formats,
@@ -24,10 +24,10 @@ from .generator import (
 
 __all__ = [
     "DEFAULT_SR",
+    "EXPORT_FORMATS",
     "MODEL_ID",
     "SAMPLE_RATE",
     "SPEAKERS",
-    "TTS_FORMATS",
     "auto_instances",
     "clean_text",
     "export_formats",

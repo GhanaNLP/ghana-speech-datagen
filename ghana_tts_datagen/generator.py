@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import queue
 import threading
@@ -197,6 +198,7 @@ class _Run:
         self.rows: dict[str, dict] = {}
         self.total_seconds = 0.0
         self.errors = 0
+        self.duration_dropped = 0
         self.fatal = ""
         self.run_id = ""
         self.wav_dir = ""
@@ -205,6 +207,8 @@ class _Run:
         self.sample_rate = DEFAULT_SR
         self.precision = "fp32"
         self.speakers: dict | None = None
+        self.min_duration: float | None = None
+        self.max_duration: float | None = None
 
 
 def _worker(run: _Run, model_id: str):
@@ -227,6 +231,11 @@ def _worker(run: _Run, model_id: str):
                                 speakers=run.speakers)
             wav = resample(wav, SAMPLE_RATE, run.sample_rate)
             dur = float(len(wav)) / run.sample_rate
+            if (run.min_duration is not None and dur < run.min_duration) or \
+               (run.max_duration is not None and dur > run.max_duration):
+                with run.lock:
+                    run.duration_dropped += 1
+                continue
             uid = f"{idx:07d}_{run.run_id}"
             rel = f"wavs/{uid}.wav"
             out = os.path.join(run.wav_dir, f"{uid}.wav")
@@ -277,6 +286,9 @@ def generate(
     cfg_value: float = 2.0,
     steps: int = 10,
     max_chars: int = 400,
+    max_samples: int | None = None,
+    min_duration: float | None = None,
+    max_duration: float | None = None,
     model_id: str = MODEL_ID,
     token: str | None = None,
     save_every: int = 200,
@@ -292,6 +304,13 @@ def generate(
     ``manifest.jsonl`` and ``progress.json``. Resumes automatically if
     ``out_dir/progress.json`` exists (skips done rows). ``on_clip(seconds)`` fires
     as clips land; ``progress(msg)`` for status. Returns a summary dict.
+
+    ``max_samples`` — randomly pick at most this many rows from the source (for
+    randomised sub-sampling of large datasets).  Applied *before* generation.
+
+    ``min_duration`` / ``max_duration`` — skip generated clips whose audio length
+    (seconds) falls outside this range.  Dropped clips count toward the summary
+    ``"duration_dropped"`` field.
 
     ``speakers`` — optional dict keyed by gender (``"male"``, ``"female"``) with
     ``"wav"`` and optionally ``"text"`` keys.  If omitted the bundled reference
@@ -312,6 +331,8 @@ def generate(
     run.precision = precision
     run.wav_dir = os.path.join(out_dir, "wavs")
     run.speakers = resolve_speakers(speakers)
+    run.min_duration = min_duration
+    run.max_duration = max_duration
 
     prog_path = Path(out_dir, "progress.json")
     if prog_path.exists():
@@ -339,10 +360,15 @@ def generate(
             "sample_rate": int(sample_rate)}
 
     if texts is not None:
-        source = ((i, t) for i, t in enumerate(texts))
+        src_list = list(texts)
+        if max_samples and len(src_list) > max_samples:
+            src_list = random.sample(src_list, max_samples)
+        source = ((i, t) for i, t in enumerate(src_list))
     else:
         from datasets import load_dataset
         ds = load_dataset(dataset, config or None, split=split, streaming=True, token=token)
+        if max_samples:
+            ds = ds.shuffle(seed=42).take(max_samples)
         source = ((i, ex.get(text_column, "")) for i, ex in enumerate(ds))
 
     staged = 0
@@ -383,7 +409,8 @@ def generate(
     if run.fatal:
         raise RuntimeError(run.fatal)
     return {"rows": len(run.rows), "hours": run.total_seconds / 3600,
-            "errors": run.errors, "out_dir": out_dir, "run_id": run.run_id}
+            "errors": run.errors, "duration_dropped": run.duration_dropped,
+            "out_dir": out_dir, "run_id": run.run_id}
 
 
 def preview(*, out_dir, dataset=None, text_column=None, texts=None, config=None,
@@ -425,25 +452,26 @@ def preview(*, out_dir, dataset=None, text_column=None, texts=None, config=None,
 
 
 # --------------------------------------------------------------------------- #
-# TTS-format manifests (written beside the generated wavs/)
+# Export manifests (written beside the generated wavs/)
 # --------------------------------------------------------------------------- #
-TTS_FORMATS = ("ljspeech", "piper", "vits", "melo")
+EXPORT_FORMATS = ("ljspeech", "asr")
 
 
 def _manifest_text(s: str) -> str:
     return s.replace("\r", " ").replace("\n", " ").replace("|", " ").strip()
 
 
-def export_formats(out_dir: str, formats, lang: str | None = None) -> list[str]:
-    """Write TTS-framework manifests for an existing run (beside its ``wavs/``).
+def export_formats(out_dir: str, formats,
+                  lang: str | None = None,
+                  audio_column: str = "audio",
+                  text_column: str = "text") -> list[str]:
+    """Write standard-formatted manifests for an existing run (beside ``wavs/``).
 
     Reads ``manifest.jsonl`` and emits, per requested format:
-      * ``ljspeech`` → ``metadata.csv``           ``id|text|text``
-      * ``piper``    → ``metadata.csv`` (or ``metadata.piper.csv`` if ljspeech too)
-                                                   ``id|speaker|text``
-      * ``vits``     → ``filelist.txt`` + ``speakers.txt``   ``wavs/<id>.wav|sid|text``
-      * ``melo``     → ``metadata.list``           ``wavs/<id>.wav|speaker|LANG|text``
-    Speaker = the row's gender. Returns the paths written.
+      * ``ljspeech`` → ``metadata.csv``  ``id|text|text`` (TTS)
+      * ``asr``      → ``metadata.jsonl``  ``{"audio": "wavs/...", "text": "..."}``
+                                                 (ASR; column names configurable)
+    Returns the paths written.
     """
     out = Path(out_dir)
     rows = []
@@ -452,7 +480,7 @@ def export_formats(out_dir: str, formats, lang: str | None = None) -> list[str]:
             line = line.strip()
             if line:
                 rows.append(json.loads(line))
-    fmts = [f for f in formats if f in TTS_FORMATS]
+    fmts = [f for f in formats if f in EXPORT_FORMATS]
     written: list[str] = []
 
     def _write(name, lines):
@@ -462,22 +490,9 @@ def export_formats(out_dir: str, formats, lang: str | None = None) -> list[str]:
     if "ljspeech" in fmts:
         _write("metadata.csv",
                [f"{r['id']}|{_manifest_text(r['text'])}|{_manifest_text(r['text'])}" for r in rows])
-    if "piper" in fmts:
-        name = "metadata.piper.csv" if "ljspeech" in fmts else "metadata.csv"
-        _write(name, [f"{r['id']}|{r.get('speaker', r.get('gender',''))}|{_manifest_text(r['text'])}"
-                      for r in rows])
-    if "vits" in fmts:
-        spk: dict[str, int] = {}
-        lines = []
-        for r in rows:
-            s = r.get("speaker", r.get("gender", "spk"))
-            sid = spk.setdefault(s, len(spk))
-            lines.append(f"{r['file']}|{sid}|{_manifest_text(r['text'])}")
-        _write("filelist.txt", lines)
-        _write("speakers.txt", [f"{i}\t{s}" for s, i in sorted(spk.items(), key=lambda kv: kv[1])])
-    if "melo" in fmts:
-        lc = (lang or "und").upper()
-        _write("metadata.list",
-               [f"{r['file']}|{r.get('speaker', r.get('gender',''))}|{lc}|{_manifest_text(r['text'])}"
+    if "asr" in fmts:
+        _write("metadata.jsonl",
+               [json.dumps({audio_column: r["file"],
+                            text_column: _manifest_text(r["text"])})
                 for r in rows])
     return written

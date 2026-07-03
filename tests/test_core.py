@@ -101,17 +101,32 @@ def test_export_formats(tmp_path):
     (run / "manifest.jsonl").write_text(
         "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
 
-    export_formats(str(run), ["ljspeech", "piper", "vits", "melo"], lang="twi")
+    export_formats(str(run), ["ljspeech", "asr"])
 
     assert (run / "metadata.csv").read_text().splitlines()[0].split("|") == \
         ["0000000_ab", "hello there", "hello there"]
-    assert (run / "metadata.piper.csv").read_text().splitlines()[0].split("|") == \
-        ["0000000_ab", "male", "hello there"]
-    assert (run / "filelist.txt").read_text().splitlines()[0].startswith(
-        "wavs/0000000_ab.wav|0|")
-    assert (run / "speakers.txt").exists()
-    ml = (run / "metadata.list").read_text().splitlines()[0].split("|")
-    assert ml[0] == "wavs/0000000_ab.wav" and ml[2] == "TWI"
+
+    asr = [json.loads(l) for l in (run / "metadata.jsonl").read_text().splitlines() if l.strip()]
+    assert asr[0] == {"audio": "wavs/0000000_ab.wav", "text": "hello there"}
+    assert asr[1] == {"audio": "wavs/0000001_ab.wav", "text": "good morning"}
+
+
+def test_export_formats_asr_custom_columns(tmp_path):
+    import json
+    from ghana_tts_datagen import export_formats
+
+    run = tmp_path / "run"
+    (run / "wavs").mkdir(parents=True)
+    rows = [
+        {"id": "0000000_ab", "file": "wavs/0000000_ab.wav", "text": "hello",
+         "gender": "male", "speaker": "male", "duration": 1.0},
+    ]
+    (run / "manifest.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    export_formats(str(run), ["asr"], audio_column="wav_path", text_column="transcript")
+    entry = json.loads((run / "metadata.jsonl").read_text().splitlines()[0])
+    assert entry == {"wav_path": "wavs/0000000_ab.wav", "transcript": "hello"}
 
 
 def test_cli_speaker_args():
@@ -137,11 +152,12 @@ def test_cli_build_speakers():
     assert "text" not in spk["female"]
 
 
-def test_generate_has_on_save():
+def test_generate_params():
     import inspect
     from ghana_tts_datagen.generator import generate as _gen
     sig = inspect.signature(_gen)
-    assert "on_save" in sig.parameters
+    for kw in ("on_save", "max_samples", "min_duration", "max_duration"):
+        assert kw in sig.parameters
     assert sig.parameters["on_save"].default is None
 
 
@@ -159,10 +175,17 @@ def test_cli_parser_and_requirements():
     a = cli.build_parser().parse_args(
         ["--dataset", "org/ds", "--text-column", "text", "--hours", "5",
          "--voices", "custom", "--male-pct", "60", "--name", "run1",
-         "--formats", "piper,vits"])
+         "--format", "ljspeech,asr", "--max-samples", "500",
+         "--min-duration", "1.0", "--max-duration", "15.0",
+         "--asr-audio-col", "wav", "--asr-text-col", "txt"])
     assert a.dataset == "org/ds" and a.text_column == "text"
     assert a.hours == 5 and a.voices == "custom" and a.male_pct == 60
-    assert a.formats == "piper,vits"
+    assert a.format == "ljspeech,asr"
+    assert a.max_samples == 500
+    assert a.min_duration == 1.0
+    assert a.max_duration == 15.0
+    assert a.asr_audio_col == "wav"
+    assert a.asr_text_col == "txt"
 
     assert cli.build_parser().parse_args(["--text-file", "s.txt"]).text_file == "s.txt"
 

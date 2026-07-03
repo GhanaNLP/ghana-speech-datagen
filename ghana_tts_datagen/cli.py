@@ -25,7 +25,7 @@ import os
 import sys
 from pathlib import Path
 
-from .generator import DEFAULT_SR, MODEL_ID, sanitize_name
+from .generator import DEFAULT_SR, EXPORT_FORMATS, MODEL_ID, sanitize_name
 
 DATASET_ORG = "ghananlpcommunity"
 
@@ -59,13 +59,22 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--cfg", type=float, default=2.0, dest="cfg_value", help="CFG value")
     gen.add_argument("--steps", type=int, default=10, help="inference timesteps")
     gen.add_argument("--model", default=MODEL_ID, help="VoxCPM model id")
+    gen.add_argument("--max-samples", type=int,
+                     help="randomly pick at most this many texts (randomised sub-sample)")
+    gen.add_argument("--min-duration", type=float,
+                     help="skip clips shorter than this many seconds")
+    gen.add_argument("--max-duration", type=float,
+                     help="skip clips longer than this many seconds")
 
     out = p.add_argument_group("output")
     out.add_argument("--out", help="output directory (default: data/<name>)")
     out.add_argument("--name", help="run name (folder under data/; enables resume)")
-    out.add_argument("--formats", default="ljspeech",
-                     help="TTS manifests to write (comma list): ljspeech,piper,vits,melo")
-    out.add_argument("--lang", help="language code for the melo manifest (e.g. TWI)")
+    out.add_argument("--format", default="ljspeech",
+                     help=f"export format(s) (comma list): {','.join(EXPORT_FORMATS)}")
+    out.add_argument("--asr-audio-col", dest="asr_audio_col", default="audio",
+                     help="column name for audio paths in ASR metadata (default: audio)")
+    out.add_argument("--asr-text-col", dest="asr_text_col", default="text",
+                     help="column name for transcripts in ASR metadata (default: text)")
     out.add_argument("--save-every", type=int, default=200, help="write manifest every N rows")
     out.add_argument("--push", metavar="REPO_ID",
                      help="override auto-generated HF dataset repo (default: <user>/ghana-tts-synth-<name>)")
@@ -202,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
         voices=args.voices, male_pct=args.male_pct, sample_rate=args.sample_rate,
         precision=args.precision, instances=args.instances,
         cfg_value=args.cfg_value, steps=args.steps, max_chars=args.max_chars,
+        max_samples=args.max_samples,
+        min_duration=args.min_duration, max_duration=args.max_duration,
         model_id=args.model, token=args.token, save_every=args.save_every,
         speakers=speakers,
         on_clip=_on_clip, on_save=_on_save,
@@ -209,11 +220,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     bar.close()
 
-    fmts = [f.strip() for f in (args.formats or "").split(",") if f.strip()]
-    written = generator.export_formats(out_dir, fmts, lang=args.lang) if fmts else []
+    fmts = [f.strip() for f in (args.format or "").split(",") if f.strip()]
+    written = generator.export_formats(out_dir, fmts,
+                                       audio_column=args.asr_audio_col,
+                                       text_column=args.asr_text_col) if fmts else []
 
+    dropped = summary.get("duration_dropped", 0)
     print(f"\n✅ {summary['rows']} clips · {summary['hours']:.2f} h "
-          f"({summary['errors']} errors) → {summary['out_dir']}", file=sys.stderr)
+          f"({summary['errors']} errors"
+          + (f", {dropped} dropped by duration" if dropped else "")
+          + f") → {summary['out_dir']}", file=sys.stderr)
     print("   wavs/  manifest.jsonl  progress.json"
           + ("  " + "  ".join(os.path.basename(w) for w in written) if written else ""),
           file=sys.stderr)
