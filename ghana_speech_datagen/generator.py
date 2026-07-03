@@ -97,25 +97,29 @@ def normalize_audio(audio_input, out_dir: str) -> str:
     if isinstance(audio_input, dict):
         arr = audio_input.get("array")
         sr = audio_input.get("sampling_rate", VOCPM_SR)
-        if arr is None:
-            arr, sr = librosa.load(audio_input.get("path", ""), sr=VOCPM_SR, mono=True)
-        else:
+        if arr is not None:
             arr = np.asarray(arr, dtype=np.float32)
             if arr.ndim > 1:
                 arr = arr.mean(axis=1)
             if sr != VOCPM_SR:
                 arr = librosa.resample(arr, orig_sr=int(sr), target_sr=VOCPM_SR)
+        else:
+            arr, _ = librosa.load(audio_input["path"], sr=VOCPM_SR, mono=True)
         h = hashlib.sha256(arr.tobytes()).hexdigest()[:16]
+        src = ("array", arr)
     else:
         p = str(audio_input)
         h = hashlib.sha256(p.encode()).hexdigest()[:16]
+        src = ("path", p)
 
     out_path = os.path.join(out_dir, "_normalized", f"{h}.wav")
     if not os.path.isfile(out_path):
-        arr, _ = librosa.load(str(audio_input) if not isinstance(audio_input, dict) else audio_input.get("path", ""),
-                              sr=VOCPM_SR, mono=True)
+        if src[0] == "array":
+            wav = src[1]
+        else:
+            wav, _ = librosa.load(src[1], sr=VOCPM_SR, mono=True)
         tmp = out_path + ".tmp"
-        sf.write(tmp, arr, VOCPM_SR, subtype="PCM_16")
+        sf.write(tmp, wav, VOCPM_SR, subtype="PCM_16")
         os.replace(tmp, out_path)
     return out_path
 
