@@ -17,7 +17,7 @@ for the full list.
 
 ## Run in the cloud
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/GhanaNLP/ghana-speech-datagen/blob/main/notebooks/ghana_speech_datagen.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/GhanaNLP/ghana-speech-datagen/blob/main/examples/ghana_speech_datagen.ipynb)
 
 Pick a **GPU** runtime (Colab: `Runtime → Change runtime type → GPU`).
 
@@ -141,7 +141,9 @@ ghana_speech_datagen/
   cli.py             the `ghana-speech-datagen` command
   generator.py       voice-clone, silence-trim, parallel run, resume, format export
   speakers/          built-in male/female reference wav + text
-notebooks/ghana_speech_datagen.ipynb   Colab (GPU) runner
+examples/
+  ghana_speech_datagen.ipynb   Colab (GPU) runner
+  modal_run.py                Modal (serverless GPU) runner
 tests/
 ```
 
