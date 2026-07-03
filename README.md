@@ -48,9 +48,8 @@ ghana-tts-datagen --dataset ghananlpcommunity/your-text-dataset --text-column te
 ghana-tts-datagen --dataset ghananlpcommunity/your-text-dataset --text-column text \
     --hours 5 --name twi-run --format ljspeech
 
-# From your own sentences (one per line) → ASR format (audio + text + description)
-ghana-tts-datagen --text-file sentences.txt --hours 2 --format asr \
-    --asr-audio-col audio --asr-text-col text --asr-description-col description
+# From your own sentences (one per line) → ASR format (audio + text)
+ghana-tts-datagen --text-file sentences.txt --hours 2 --format asr
 
 # Randomly sample 5000 texts from a large dataset, both formats
 ghana-tts-datagen --dataset org/big-text --text-column text --max-samples 5000 \
@@ -70,7 +69,7 @@ data/twi-run/
   progress.json            resume state (re-run to continue)
   # + the manifest(s) for the format(s) you asked for:
   metadata.csv             ljspeech  →  id|text|text
-  metadata.jsonl           asr       →  {"audio":"...","text":"...","description":"..."}
+  metadata.jsonl           asr       →  {"audio":"...","text":"..."}
 ```
 
 ## Options
@@ -91,7 +90,7 @@ data/twi-run/
 | `--max-samples N` | randomly pick at most this many texts (sub-sample) |
 | `--min-duration` / `--max-duration` | skip clips shorter/longer than these (seconds) |
 | `--format` | export format(s): `ljspeech`, `asr`, or both (default `ljspeech`) |
-| `--asr-audio-col` / `--asr-text-col` / `--asr-description-col` | column names in ASR `metadata.jsonl` |
+| `--description` | description for the pushed HF dataset repo |
 | `--name` / `--out` | run name (→ `data/<name>`) or explicit output dir |
 | `--push REPO [--private]` | upload the finished run to an HF dataset repo |
 | `--token` | HF token (else `HF_TOKEN` env) — for gated datasets/models |
@@ -124,8 +123,7 @@ from ghana_tts_datagen import generate, export_formats
 summary = generate(out_dir="data/run", dataset="org/ds", text_column="text",
                    target_hours=5, voices="custom", male_pct=50,
                    max_samples=10000)
-export_formats("data/run", ["ljspeech", "asr"],
-               audio_column="audio", text_column="text", description_column="description")
+export_formats("data/run", ["ljspeech", "asr"])
 print(summary)
 # {'rows': ..., 'hours': ..., 'errors': ..., 'duration_dropped': ...}
 ```

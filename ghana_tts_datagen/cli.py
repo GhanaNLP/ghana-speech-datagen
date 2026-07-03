@@ -71,15 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
     out.add_argument("--name", help="run name (folder under data/; enables resume)")
     out.add_argument("--format", default="ljspeech",
                      help=f"export format(s) (comma list): {','.join(EXPORT_FORMATS)}")
-    out.add_argument("--asr-audio-col", dest="asr_audio_col", default="audio",
-                     help="column name for audio paths in ASR metadata (default: audio)")
-    out.add_argument("--asr-text-col", dest="asr_text_col", default="text",
-                     help="column name for transcripts in ASR metadata (default: text)")
-    out.add_argument("--asr-description-col", dest="asr_description_col", default="description",
-                     help="column name for description in ASR metadata (default: description)")
     out.add_argument("--save-every", type=int, default=200, help="write manifest every N rows")
     out.add_argument("--push", metavar="REPO_ID",
                      help="override auto-generated HF dataset repo (default: <user>/ghana-tts-synth-<name>)")
+    out.add_argument("--description", default="",
+                     help="description for the pushed HF dataset repo")
     out.add_argument("--private", action="store_true",
                      help="make the dataset repo private (default: public)")
     out.add_argument("--token", help="HF token (required; falls back to HF_TOKEN env)")
@@ -184,8 +180,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         who = HfApi(token=args.token).whoami()
         push_repo = f"{who['name']}/ghana-tts-synth-{name}"
+    repo_desc = args.description or f"Synthetic speech data generated with ghana-tts-datagen ({name})"
     create_repo(push_repo, repo_type="dataset", token=args.token,
-                private=args.private, exist_ok=True)
+                private=args.private, exist_ok=True,
+                description=repo_desc)
     push_url = f"https://huggingface.co/datasets/{push_repo}"
     print(f"Dataset will be pushed to: {push_url}", file=sys.stderr)
 
@@ -223,10 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     bar.close()
 
     fmts = [f.strip() for f in (args.format or "").split(",") if f.strip()]
-    written = generator.export_formats(out_dir, fmts,
-                                       audio_column=args.asr_audio_col,
-                                       text_column=args.asr_text_col,
-                                       description_column=args.asr_description_col) if fmts else []
+    written = generator.export_formats(out_dir, fmts) if fmts else []
 
     dropped = summary.get("duration_dropped", 0)
     print(f"\n✅ {summary['rows']} clips · {summary['hours']:.2f} h "
