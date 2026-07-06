@@ -115,7 +115,7 @@ data/<name>/
 | `--min-samples N` | minimum valid samples required (default 50) |
 | `--sample-rate HZ` | output WAV rate (default 22050) |
 | `--cfg` | CFG value passed to the server (default 2.0) |
-| `--backend cuda\|cpu` | inference backend (default `cuda`) |
+| `--backend cuda\|cpu` | inference backend (auto-detected if omitted) |
 | `--name` / `--out` | run name (→ `data/<name>`) or explicit output dir |
 | `--push REPO` | upload the finished run to an HF dataset repo (public) |
 | `--private` | make the pushed repo private instead |
@@ -136,7 +136,6 @@ summary = generate_asr(
     pairs=pairs,
     target_seconds=7200,
     sample_rate=16000,
-    backend="cuda",
     on_clip=lambda dur: print(f"Generated {dur:.1f}s"),
 )
 # {'rows': ..., 'hours': ..., 'skipped': ..., 'duration_dropped': ...}
@@ -147,7 +146,7 @@ For direct server control:
 ```python
 from ghana_speech_datagen.voxcpm_cpp import VoxCPMCppServer
 
-with VoxCPMCppServer(voice_dir=".voices", backend="cuda") as server:
+with VoxCPMCppServer(voice_dir=".voices") as server:
     server.wait_until_ready()
     server.register_voice("spk1", "/refs/spk1.wav", "Prompt text")
     wav_bytes = server.synthesize("spk1", "Text to speak", response_format="wav")
@@ -157,7 +156,7 @@ with VoxCPMCppServer(voice_dir=".voices", backend="cuda") as server:
 
 - **Backend** — VoxCPM.cpp with GGML CUDA kernels. On an H200, RTF is ~0.33
   (~55 steps/s, 11.4 s audio generated in 3.7 s wall time).
-- **CPU fallback** — set `--backend cpu` for CPU-only environments (much slower).
+- **CPU fallback** — backend is auto-detected (runs `nvidia-smi`); override with `--backend cpu`.
 - **Sample rate.** The model synthesises at **16 kHz**; output is resampled to
   `--sample-rate`. Upsampling beyond 16 kHz doesn't add acoustic bandwidth.
 - **Single server process.** A single `voxcpm-server` handles all synthesis

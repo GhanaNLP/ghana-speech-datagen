@@ -55,6 +55,20 @@ class APIError(VoxCPMError):
     """The server returned a non-2xx response."""
 
 
+def detect_backend() -> str:
+    """Auto-detect CUDA availability, return 'cuda' or 'cpu'."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["nvidia-smi"], capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            return "cuda"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return "cpu"
+
+
 class VoxCPMCppServer:
     """Manages a local voxcpm-server subprocess for TTS inference.
 
@@ -74,7 +88,7 @@ class VoxCPMCppServer:
         voice_dir: str | None = None,
         model_name: str = "ghana-tts-36k",
         threads: int = 8,
-        backend: str = "cuda",
+        backend: str | None = None,
         output_sample_rate: int = 16000,
         server_binary: str | None = None,
         max_decode_steps: int = 1024,
@@ -86,7 +100,7 @@ class VoxCPMCppServer:
         self.voice_dir = voice_dir or os.path.join(os.getcwd(), ".voxcpm-voices")
         self.model_name = model_name
         self.threads = threads
-        self.backend = backend
+        self.backend = backend if backend is not None else detect_backend()
         self.output_sample_rate = output_sample_rate
         self.server_binary = server_binary or SERVER_BINARY
         self.max_decode_steps = max_decode_steps

@@ -106,7 +106,7 @@ def generate_asr(
     cfg_value: float = 2.0,
     on_clip=None,
     progress=None,
-    backend: str = "cuda",
+    backend: str | None = None,
 ) -> dict:
     """Generate synthetic speech from texts using VoxCPM.cpp.
 
