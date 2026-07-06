@@ -1,8 +1,7 @@
 """Command-line interface for Ghana Speech Datagen.
 
 Subcommands:
-  tts   Generate synthetic speech from text (needs GPU)
-  asr   Generate synthetic speech from text using reference audio pool (needs GPU)
+  asr   Generate synthetic speech from text (needs GPU)
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ from pathlib import Path
 
 import soundfile as sf
 
-from .generator import DEFAULT_SR, MODEL_ID, sanitize_name
+from .generator import DEFAULT_SR, sanitize_name
 
 DATASET_ORG = "ghananlpcommunity"
 MIN_ASR_SAMPLES = 50
@@ -104,68 +103,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="command", required=True)
 
-    # ---- tts ----
-    tts = sub.add_parser("tts", help="Generate synthetic speech from text (needs GPU)",
-                         formatter_class=argparse.RawDescriptionHelpFormatter)
-    tts_src = tts.add_argument_group("source")
-    tts_src.add_argument("--dataset", help="text dataset id on the HF Hub")
-    tts_src.add_argument("--config", help="dataset config (optional)")
-    tts_src.add_argument("--split", default="train")
-    tts_src.add_argument("--text", dest="text_column",
-                         help="column with the text to synthesise (with --dataset)")
-    tts_src.add_argument("--text-file", help="path to a .txt file, one sentence per line")
-    tts_src.add_argument("--max-chars", type=int, default=400,
-                         help="skip rows longer than this (default 400)")
-
-    tts_gen = tts.add_argument_group("generation")
-    tts_gen.add_argument("--hours", type=float, default=1.0, help="target hours of audio")
-    tts_gen.add_argument("--voices", choices=["custom", "male", "female"], default="custom")
-    tts_gen.add_argument("--male-pct", type=int, default=50, help="%% male in custom mode")
-    tts_gen.add_argument("--sample-rate", type=int, default=DEFAULT_SR,
-                         help=f"output WAV rate (default {DEFAULT_SR})")
-    tts_gen.add_argument("--precision", choices=["fp32", "fp16", "bf16"], default="fp32",
-                         help="model precision")
-    tts_gen.add_argument("--instances", type=int,
-                         help="parallel model instances (default: auto by VRAM)")
-    tts_gen.add_argument("--cfg", type=float, default=2.0, dest="cfg_value", help="CFG value")
-    tts_gen.add_argument("--steps", type=int, default=10, help="inference timesteps")
-    tts_gen.add_argument("--model", default=MODEL_ID, help="VoxCPM model id")
-    tts_gen.add_argument("--max-samples", type=int,
-                         help="randomly pick at most this many texts")
-    tts_gen.add_argument("--min-duration", type=float,
-                         help="skip clips shorter than this (seconds)")
-    tts_gen.add_argument("--max-duration", type=float,
-                         help="skip clips longer than this (seconds)")
-
-    tts_out = tts.add_argument_group("output")
-    tts_out.add_argument("--out", help="output directory (default: data/<name>)")
-    tts_out.add_argument("--name", help="run name; enables resume")
-    tts_out.add_argument("--save-every", type=int, default=200,
-                         help="write manifest every N rows")
-    tts_out.add_argument("--push", metavar="REPO_ID",
-                         help="override auto-generated HF dataset repo")
-    tts_out.add_argument("--private", action="store_true",
-                         help="make the dataset repo private")
-    tts_out.add_argument("--token", help="HF token (required for private model)")
-
-    tts_spk = tts.add_argument_group("speaker reference audio")
-    tts_spk.add_argument("--speaker-dir",
-                         help="dir with speaker WAV files and optional <id>.txt sidecars; "
-                              "speaker IDs are derived from filenames")
-    tts_spk.add_argument("--ref-text",
-                         help="fallback prompt text for all custom speakers "
-                              "(ignored when a speaker has its own <id>.txt)")
-    tts_spk.add_argument("--min-ref-duration", type=float, default=DEFAULT_MIN_REF_DURATION,
-                         help=f"minimum ref audio duration in seconds (default {DEFAULT_MIN_REF_DURATION})")
-    tts_spk.add_argument("--max-ref-duration", type=float, default=DEFAULT_MAX_REF_DURATION,
-                         help=f"maximum ref audio duration in seconds (default {DEFAULT_MAX_REF_DURATION})")
-
-    tts_misc = tts.add_argument_group("misc")
-    tts_misc.add_argument("--preview", type=int, metavar="N",
-                          help="generate N preview clips and exit")
-    tts_misc.add_argument("--list-datasets", action="store_true",
-                          help=f"list datasets under the {DATASET_ORG} org")
-
     # ---- asr ----
     asr = sub.add_parser("asr", help="Generate synthetic speech using reference audio pool (GPU required)",
                          formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -208,12 +145,10 @@ def build_parser() -> argparse.ArgumentParser:
     asr_gen = asr.add_argument_group("model")
     asr_gen.add_argument("--sample-rate", type=int, default=DEFAULT_SR,
                          help=f"output WAV rate (default {DEFAULT_SR})")
-    asr_gen.add_argument("--precision", choices=["fp32", "fp16", "bf16"], default="fp32",
-                         help="model precision")
     asr_gen.add_argument("--cfg", type=float, default=2.0, dest="cfg_value",
                          help="CFG value")
-    asr_gen.add_argument("--steps", type=int, default=10, help="inference timesteps")
-    asr_gen.add_argument("--model", default=MODEL_ID, help="VoxCPM model id")
+    asr_gen.add_argument('--backend', choices=['cuda', 'cpu'], default='cuda',
+                 help='inference backend (default: cuda)')
 
     asr_out = asr.add_argument_group("output")
     asr_out.add_argument("--out", help="output directory (default: data/<name>)")
@@ -235,109 +170,6 @@ def build_parser() -> argparse.ArgumentParser:
 # --------------------------------------------------------------------------- #
 # TTS flow
 # --------------------------------------------------------------------------- #
-
-def _build_speakers(args) -> dict | None:
-    if not args.speaker_dir:
-        return None
-    d = Path(args.speaker_dir)
-    overrides: dict = {}
-    for wav_path in sorted(d.glob("*.wav")):
-        spk_id = wav_path.stem
-        try:
-            dur = sf.info(str(wav_path)).duration
-        except Exception:
-            sys.exit(f"Speaker '{spk_id}': {wav_path.name} is not a valid WAV file.")
-        _validate_ref_duration(dur, spk_id,
-                               args.min_ref_duration, args.max_ref_duration)
-        txt_path = wav_path.with_suffix(".txt")
-        text = txt_path.read_text(encoding="utf-8").strip() if txt_path.exists() else (args.ref_text or "")
-        if not text:
-            sys.exit(f"Speaker '{spk_id}': no {txt_path.name} sidecar and no --ref-text provided. "
-                     f"Either create {txt_path.name} or pass --ref-text.")
-        overrides[spk_id] = {"wav": str(wav_path), "text": text}
-    if not overrides:
-        sys.exit(f"No .wav files found in --speaker-dir: {args.speaker_dir}")
-    if len(overrides) > 10:
-        sys.exit(f"At most 10 speakers supported, got {len(overrides)}")
-    return overrides
-
-
-def _cmd_tts(args):
-    from . import generator
-
-    texts = None
-    if args.text_file:
-        texts = [ln.strip() for ln in open(args.text_file, encoding="utf-8") if ln.strip()]
-        default_name = sanitize_name(os.path.splitext(os.path.basename(args.text_file))[0])
-    elif args.dataset and args.text_column:
-        default_name = sanitize_name(args.dataset.split("/")[-1])
-    else:
-        sys.exit("Provide --text-file PATH, or --dataset ID with --text COL.")
-
-    speakers = _build_speakers(args)
-    name = args.name or default_name
-    out_dir = args.out or os.path.join("data", name)
-
-    if args.preview:
-        clips = generator.preview(
-            out_dir=out_dir, dataset=args.dataset, text_column=args.text_column, texts=texts,
-            config=args.config, split=args.split, voices=args.voices, male_pct=args.male_pct,
-            sample_rate=args.sample_rate, precision=args.precision,
-            cfg_value=args.cfg_value, steps=args.steps,
-            n=args.preview, max_chars=args.max_chars, model_id=args.model, token=args.token,
-            speakers=speakers,
-        )
-        for c in clips:
-            print(f"  [{c['spk_id']}] {c['duration']}s  {c['file']}\n      {c['text'][:90]}")
-        return 0
-
-    token = _resolve_token(args)
-    push_repo = _push_repo(name, token, args.push, args.private)
-    push_url = f"https://huggingface.co/datasets/{push_repo}"
-    print(f"Dataset will be pushed to: {push_url}", file=sys.stderr)
-
-    from tqdm.auto import tqdm
-    bar = tqdm(total=round(args.hours * 3600), unit="s", unit_scale=False,
-               desc="Synthesising audio", file=sys.stderr)
-    state = {"last": 0.0}
-
-    def _on_clip(total_sec):
-        delta = total_sec - state["last"]
-        if delta > 0:
-            bar.update(delta)
-            state["last"] = total_sec
-
-    def _on_save(dir_path):
-        _upload(dir_path, push_repo, token,
-                msg=f"synth data: {bar.n:.0f}s / {bar.total:.0f}s")
-
-    summary = generator.generate(
-        out_dir=out_dir, dataset=args.dataset, text_column=args.text_column, texts=texts,
-        config=args.config, split=args.split, target_hours=args.hours,
-        voices=args.voices, male_pct=args.male_pct, sample_rate=args.sample_rate,
-        precision=args.precision, instances=args.instances,
-        cfg_value=args.cfg_value, steps=args.steps, max_chars=args.max_chars,
-        max_samples=args.max_samples,
-        min_duration=args.min_duration, max_duration=args.max_duration,
-        model_id=args.model, token=token, save_every=args.save_every,
-        speakers=speakers,
-        on_clip=_on_clip, on_save=_on_save,
-        progress=lambda m: bar.set_description(m[:48]),
-    )
-    bar.close()
-
-    written = generator.export_formats(out_dir, ["ljspeech"])
-
-    dropped = summary.get("duration_dropped", 0)
-    print(f"\n✅ {summary['rows']} clips · {summary['hours']:.2f} h "
-          f"({summary['errors']} errors"
-          + (f", {dropped} dropped by duration" if dropped else "")
-          + f") → {summary['out_dir']}", file=sys.stderr)
-    print("   wavs/  manifest.jsonl  progress.json"
-          + ("  " + "  ".join(os.path.basename(w) for w in written) if written else ""),
-          file=sys.stderr)
-    print(f"   pushed to {push_url}", file=sys.stderr)
-    return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -483,9 +315,9 @@ def _cmd_asr(args):
         min_duration=args.min_duration, max_duration=args.max_duration,
         min_samples=args.min_samples,
         target_seconds=target_seconds,
-        sample_rate=args.sample_rate, precision=args.precision,
-        cfg_value=args.cfg_value, steps=args.steps,
-        model_id=args.model, token=token,
+        sample_rate=args.sample_rate,
+        cfg_value=args.cfg_value,
+        backend=args.backend,
         on_clip=_on_clip,
         progress=lambda m: bar.set_description(m[:48]),
     )
@@ -520,8 +352,6 @@ def main(argv: list[str] | None = None) -> int:
         print("\n".join(ids) if ids else f"(no datasets found under {DATASET_ORG})")
         return 0
 
-    if args.command == "tts":
-        return _cmd_tts(args)
     elif args.command == "asr":
         return _cmd_asr(args)
     else:
