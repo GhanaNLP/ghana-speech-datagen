@@ -1,8 +1,36 @@
 # Ghana Speech Datagen
 
-Generate synthetic ASR training data using **VoxCPM.cpp** (GGML/CUDA/CPU) — no
-PyTorch needed. Feeds texts from an HF dataset or file through the Ghana NLP
-Community VoxCPM GGUF model, voice-cloning from a pool of reference audio.
+Generate synthetic speech training data using **VoxCPM.cpp** (GGML/CUDA/CPU) — no
+PyTorch needed. Feeds text through the Ghana NLP Community VoxCPM GGUF model,
+voice-cloning from reference audio.
+
+**You don't have to bring your own text.** Just pass `--lang` and the tool pulls
+default text (and reference voices) for that language automatically:
+
+```bash
+ghana-speech-datagen tts --lang ewe --hours 5   # → TTS dataset (LJSpeech)
+ghana-speech-datagen asr --lang ewe --hours 5   # → ASR dataset (JSONL manifest)
+```
+
+This uses the model's language tag (`<|lang:ewe|> …`, exactly as the model was
+trained) so pronunciation matches the language. You can still bring your own text
+(`--dataset`/`--text-file`) and reference audio when you want to.
+
+## Two modes
+
+Both modes synthesise speech from text; they differ in the **reference voices**
+they use and the **output format** they write — each ready for its use case.
+
+| | `tts` | `asr` |
+|---|---|---|
+| **Voices** | a small speaker set (the packaged male/female voices by default, or your own) | a large, diverse pool of reference audio (min. `--min-samples`, default 50) |
+| **Best for** | building a TTS voice/dataset with consistent speakers | building ASR training data with many speakers for robustness |
+| **Reference** | `--voices`, `--speaker-dir`, `--speaker` | `--ref-dataset`, `--ref-audio-dir`, or in-language default pool |
+| **Output** | LJSpeech: `wavs/` + `metadata.csv` (`id\|text\|text`) | `wavs/` + `metadata.jsonl` (`{"audio","text"}`) |
+| **Default rate** | 22050 Hz (TTS standard) | 22050 Hz |
+
+Every clip is also recorded in `manifest.jsonl` (full record, including
+`speaker` for `tts`).
 
 > **GPU recommended** for usable speed. VoxCPM.cpp with CUDA achieves ~3×
 > real-time (RTF 0.33) on an H200. Works on CPU too (`--backend cpu`) but is
@@ -10,9 +38,34 @@ Community VoxCPM GGUF model, voice-cloning from a pool of reference audio.
 
 ## Supported languages
 
-The `ghana-tts-36k` model supports **41+ Ghanaian languages**. See the model card
-at [hf.co/ghananlpcommunity/ghana-tts-36k](https://huggingface.co/ghananlpcommunity/ghana-tts-36k)
-for the full list.
+The `ghana-tts-36k` model supports **41+ Ghanaian languages** (plus English). Every
+language ships with a built-in default text source, so `--lang <code>` is all you
+need. List them with:
+
+```bash
+ghana-speech-datagen asr --list-langs
+```
+
+Codes are the same tags the model was trained with — e.g. `ewe`, `fat`, `dag`,
+`twi-asante`, `twi-akuapem`, `en`. `--lang` also accepts a full config name
+(`Ewe_ewe`) or display name (`Asante Twi`).
+
+### Adding more text sources
+
+Default text comes from [`ghananlpcommunity/ghana-speech`](https://huggingface.co/datasets/ghananlpcommunity/ghana-speech).
+To give a language extra text, add one line to `_EXTRA_SOURCES` in
+[`ghana_speech_datagen/text_sources.py`](ghana_speech_datagen/text_sources.py).
+Twi, for example, also draws from a 500-hour health corpus:
+
+```python
+_EXTRA_SOURCES = {
+    "twi-asante": [
+        TextSource("ghananlpcommunity/twi-health-asr-gemini-500hrs",
+                   text_column="transcription"),
+    ],
+    # "ewe": [TextSource("your-org/your-ewe-text", text_column="text")],
+}
+```
 
 ## Setup
 
@@ -58,18 +111,61 @@ Set the `VOXCPM_SERVER_BIN` environment variable so the tool can find the server
 export VOXCPM_SERVER_BIN=/path/to/voxcpm-cpp/build/examples/voxcpm-server
 ```
 
+## Quickstart — TTS
+
+Synthesise a TTS dataset voiced by a small, consistent speaker set. By default it
+uses the packaged male/female voices — no reference audio needed.
+
+```bash
+# Simplest: default text for a language, packaged male + female voices
+ghana-speech-datagen tts --lang ewe --hours 5
+
+# One voice only
+ghana-speech-datagen tts --lang ewe --voices female --hours 5
+
+# Your own speakers: a dir of NAME.wav + NAME.txt (prompt) pairs
+ghana-speech-datagen tts --lang ewe --speaker-dir my_voices/ --hours 5
+
+# A single custom speaker
+ghana-speech-datagen tts --lang ewe \
+    --speaker ref.wav --speaker-text "the reference transcript" --hours 2
+
+# Your own text file, tagged with a language for correct pronunciation
+ghana-speech-datagen tts --text-file sentences.txt --lang ewe --hours 2
+```
+
+Output is **LJSpeech** format (`wavs/` + `metadata.csv`), ready for most TTS
+trainers (Coqui TTS, VITS, Tacotron, …).
+
 ## Quickstart — ASR
 
-Synthesise speech texts using reference audio for voice cloning. Provide
-**texts to synthesise** and a **reference audio source** (HF dataset or local
-directory) — the model speaks each text in the voice of a randomly-selected
-reference.
+The model speaks each text in the voice of a randomly-selected reference clip
+from a large pool. Both the text and the reference audio have sensible defaults
+per language.
+
+```bash
+# Simplest: default text + in-language reference voices for a language
+ghana-speech-datagen asr --lang ewe --hours 5
+
+# Default text for Twi (ghana-speech + health corpus), your own reference voices
+ghana-speech-datagen asr --lang twi-asante \
+    --ref-dataset org/ref-audio-ds --ref-text-column text --hours 5
+
+# List every supported language and its text sources
+ghana-speech-datagen asr --list-langs
+```
+
+You can also bring your own text and/or reference audio:
 
 ```bash
 # Texts from HF dataset, ref audio from another HF dataset
 ghana-speech-datagen asr --dataset org/text-ds --text text \
     --ref-dataset org/ref-audio-ds --ref-text-column text \
     --hours 5
+
+# Your own text file, but tag it with a language so pronunciation is correct
+ghana-speech-datagen asr --text-file sentences.txt --lang ewe \
+    --ref-dataset org/ref-audio-ds --hours 2
 
 # Texts from a .txt file, ref audio from local dir + metadata
 ghana-speech-datagen asr --text-file sentences.txt \
@@ -81,10 +177,28 @@ ghana-speech-datagen asr --dataset org/text-ds --text text \
     --ref-dataset org/ref-audio-ds --ref-text-column text \
     --max-samples 2000 --backend cpu
 
-# Push result to a new HF dataset repo
+# Send it to a specific HF dataset repo (instead of the auto-named one)
 ghana-speech-datagen asr --dataset org/text-ds --text text \
     --ref-dataset org/ref-audio-ds --ref-text-column text \
     --hours 10 --push my-asr-repo
+```
+
+## Uploading to Hugging Face
+
+**Both modes auto-push to the Hub by default**, incrementally, as clips are
+generated — so a long run keeps a live copy on HF even if it's interrupted.
+
+- The repo is auto-named `you/ghana-speech-synth-<name>`; override it with `--push REPO_ID`.
+- `--save-every N` controls how often the partial dataset is flushed and pushed (default 200 clips).
+- `--private` makes the repo private.
+- **`--no-push` disables uploading** — generate locally only (no HF token needed).
+
+```bash
+# Local only, nothing uploaded
+ghana-speech-datagen tts --lang ewe --hours 5 --no-push
+
+# Push to a private repo, uploading every 500 clips
+ghana-speech-datagen asr --lang ewe --hours 20 --private --save-every 500
 ```
 
 ## Output
@@ -92,14 +206,24 @@ ghana-speech-datagen asr --dataset org/text-ds --text text \
 ```
 data/<name>/
   wavs/<id>.wav            mono 16-bit PCM, at --sample-rate (default 22050)
-  manifest.jsonl           full info: id, file, text, duration, ref_audio, ref_text
-  metadata.jsonl           ASR manifest:  {"audio":"...","text":"..."}
+  manifest.jsonl           full record per clip: id, file, text, duration (+ speaker for tts)
+
+  # tts writes (LJSpeech, the standard TTS layout):
+  metadata.csv             id|text|normalized_text
+
+  # asr writes:
+  metadata.jsonl           {"audio":"wavs/...","text":"..."}
 ```
+
+The transcript in the manifests is the **clean spoken text** — the `<|lang:…|>`
+tag is only a synthesis control signal and is never written to disk.
 
 ## Options
 
 | flag | meaning |
 |------|---------|
+| `--lang CODE` | use built-in default text for a language; also sets the model's `<|lang:CODE|>` tag and defaults the reference pool to in-language audio |
+| `--list-langs` | list supported languages and their default text sources |
 | `--dataset ID` / `--text COL` | source: an HF dataset with text to synthesise |
 | `--text-file PATH` | source: a .txt file with text to synthesise |
 | `--config` / `--split` | dataset config / split (default `train`) |
@@ -117,9 +241,11 @@ data/<name>/
 | `--cfg` | CFG value passed to the server (default 2.0) |
 | `--backend cuda\|cpu` | inference backend (auto-detected if omitted) |
 | `--name` / `--out` | run name (→ `data/<name>`) or explicit output dir |
-| `--push REPO` | upload the finished run to an HF dataset repo (public) |
+| `--push REPO` | override the auto-named HF dataset repo to push to |
+| `--no-push` | disable the default auto-push; generate locally only |
+| `--save-every N` | flush + push every N clips as they're generated (default 200) |
 | `--private` | make the pushed repo private instead |
-| `--token` | HF token — for gated datasets/models |
+| `--token` | HF token — for gated datasets/models and pushing |
 
 ## Use as a library
 

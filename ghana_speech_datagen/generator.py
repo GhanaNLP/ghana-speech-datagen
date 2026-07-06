@@ -53,6 +53,15 @@ def sanitize_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "-", name.strip()).strip("-") or "run"
 
 
+def builtin_speaker_refs() -> list[tuple[str, str]]:
+    """Return ``(wav_path, transcript)`` pairs for the packaged reference voices.
+
+    Used as a fallback reference pool when the caller supplies no reference
+    audio (e.g. for a language with no default in-language audio).
+    """
+    return [(s["wav"], s["text"]) for s in SPEAKERS.values()]
+
+
 def normalize_audio(audio_input, out_dir: str) -> str:
     """Read audio (HF dict or path), convert to 16 kHz mono 16-bit WAV, return path."""
     os.makedirs(os.path.join(out_dir, "_normalized"), exist_ok=True)
@@ -92,12 +101,14 @@ def resample(wav, src_sr: int, dst_sr: int):
 
 
 # --------------------------------------------------------------------------- #
-# ASR generation (VoxCPM.cpp)
+# Core generation (VoxCPM.cpp)
 # --------------------------------------------------------------------------- #
-def generate_asr(
+def generate(
     *,
     out_dir: str,
     pairs: list,
+    output_formats=("asr",),
+    speaker_labels: list | None = None,
     min_duration: float = 1.0,
     max_duration: float = 30.0,
     min_samples: int = 50,
@@ -105,14 +116,33 @@ def generate_asr(
     sample_rate: int = DEFAULT_SR,
     cfg_value: float = 2.0,
     on_clip=None,
+    on_save=None,
+    save_every: int = 0,
     progress=None,
     backend: str | None = None,
+    lang: str | None = None,
 ) -> dict:
-    """Generate synthetic speech from texts using VoxCPM.cpp.
+    """Synthesise speech from texts using VoxCPM.cpp.
 
     ``pairs`` is a list of ``(text_to_synthesise, ref_audio, ref_text)`` tuples.
-    For each text, a random reference audio is used as the voice prompt.
-    Output is ASR format (``wavs/`` + ``manifest.jsonl`` + ``metadata.jsonl``).
+    Each text is voiced by its paired reference audio (the voice prompt).
+
+    ``on_save`` / ``save_every`` -- when ``save_every > 0``, the manifests are
+    flushed to disk and ``on_save(out_dir)`` is called every ``save_every`` new
+    clips (and once at the end). Used to push data incrementally as it is made.
+
+    ``output_formats`` -- which manifest(s) to emit next to ``wavs/`` and the
+    always-written ``manifest.jsonl``.  ``"asr"`` writes ``metadata.jsonl``
+    (``{"audio","text"}``); ``"ljspeech"`` writes ``metadata.csv``
+    (``id|text|text``) -- the standard single-/multi-speaker TTS layout.
+
+    ``speaker_labels`` -- optional list parallel to ``pairs``; when given, each
+    manifest row records which speaker voiced it (useful for multi-speaker TTS).
+
+    ``lang`` -- optional language code. When set, the model's language tag
+    ``<|lang:CODE|> `` is prepended to each text *for synthesis only*; the
+    manifests still store the clean transcript (the tag is a TTS control token,
+    not part of what is spoken).
 
     ``backend`` -- ``"cuda"`` (default) or ``"cpu"``.
     """
@@ -122,20 +152,23 @@ def generate_asr(
     wav_dir = os.path.join(out_dir, "wavs")
     os.makedirs(wav_dir, exist_ok=True)
 
-    # Normalise all reference audio up front
-    ref_paths: dict[int, tuple[str, str]] = {}
-    for idx, (_, audio_input, ref_text) in enumerate(pairs):
-        try:
-            path = normalize_audio(audio_input, out_dir)
-            ref_paths[idx] = (path, ref_text)
-        except Exception:
-            pass
+    tag = f"<|lang:{lang}|> " if lang else ""
 
-    if len(ref_paths) < min_samples:
-        raise RuntimeError(
-            f"Only {len(ref_paths)} valid reference audios "
-            f"(need >={min_samples}). Aborting."
-        )
+    def _flush(rows: list) -> list:
+        """Write manifest.jsonl + requested formats; return the format paths."""
+        with open(Path(out_dir) / "manifest.jsonl", "w", encoding="utf-8") as f:
+            for r in rows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        return export_formats(out_dir, output_formats)
+
+    def _save(rows: list) -> None:
+        _flush(rows)
+        if on_save is not None:
+            try:
+                on_save(out_dir)
+            except Exception as e:  # a failed upload shouldn't lose the run
+                if progress:
+                    progress(f"save failed: {e}")
 
     with VoxCPMCppServer(
         voice_dir=os.path.join(out_dir, ".voxcpm-voices"),
@@ -144,20 +177,29 @@ def generate_asr(
     ) as server:
         server.wait_until_ready(timeout=120.0)
 
-        voice_ids = []
-        for idx, (wav_path, ref_text) in ref_paths.items():
-            vid = f"ref_{idx}"
+        # Normalise + register each unique reference voice once, then map every
+        # pair to its voice id.  De-duping by path lets a small reference pool
+        # (e.g. the two packaged speakers) drive an arbitrary number of texts.
+        path_to_vid: dict[str, str | None] = {}
+        pair_vid: list[str | None] = []
+        for _, audio_input, ref_text in pairs:
             try:
-                server.register_voice(vid, wav_path, ref_text)
-                voice_ids.append(vid)
+                path = normalize_audio(audio_input, out_dir)
             except Exception:
-                pass
+                pair_vid.append(None)
+                continue
+            if path not in path_to_vid:
+                vid = f"ref_{len(path_to_vid)}"
+                try:
+                    server.register_voice(vid, path, ref_text)
+                    path_to_vid[path] = vid
+                except Exception:
+                    path_to_vid[path] = None
+            pair_vid.append(path_to_vid[path])
 
-        if len(voice_ids) < min_samples:
-            raise RuntimeError(
-                f"Only registered {len(voice_ids)} voices "
-                f"(need >={min_samples}). Aborting."
-            )
+        n_voices = sum(1 for v in set(path_to_vid.values()) if v is not None)
+        if n_voices == 0:
+            raise RuntimeError("No reference voices could be registered. Aborting.")
 
         valid: list[dict] = []
         skipped = 0
@@ -167,13 +209,13 @@ def generate_asr(
         for idx, (text, _, _) in enumerate(pairs):
             if total_sec >= target_seconds:
                 break
-            if not text:
+            vid = pair_vid[idx]
+            if not text or vid is None:
                 skipped += 1
                 continue
 
-            vid = voice_ids[idx % len(voice_ids)]
             try:
-                wav_bytes = server.synthesize(vid, text, response_format="wav")
+                wav_bytes = server.synthesize(vid, tag + text, response_format="wav")
                 data, sr = sf.read(io.BytesIO(wav_bytes))
                 if data.ndim > 1:
                     data = data.mean(axis=1)
@@ -196,16 +238,22 @@ def generate_asr(
             sf.write(tmp, wav, int(sample_rate), subtype="PCM_16")
             os.replace(tmp, out)
 
-            valid.append({
+            row = {
                 "id": uid,
                 "file": rel,
                 "text": text,
                 "duration": round(dur, 3),
-            })
+            }
+            if speaker_labels is not None:
+                row["speaker"] = speaker_labels[idx]
+            valid.append(row)
             total_sec += dur
 
             if on_clip:
                 on_clip(total_sec)
+
+            if save_every and len(valid) % save_every == 0:
+                _save(valid)
 
     if len(valid) < min_samples:
         raise RuntimeError(
@@ -213,15 +261,14 @@ def generate_asr(
             f"{skipped} skipped, {duration_dropped} dropped by duration. Aborting."
         )
 
-    with open(Path(out_dir) / "manifest.jsonl", "w", encoding="utf-8") as f:
-        for r in valid:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    with open(Path(out_dir) / "metadata.jsonl", "w", encoding="utf-8") as f:
-        for r in valid:
-            f.write(
-                json.dumps({"audio": r["file"], "text": r["text"]}, ensure_ascii=False)
-                + "\n"
-            )
+    # Final flush + push of everything generated.
+    written = _flush(valid)
+    if on_save is not None:
+        try:
+            on_save(out_dir)
+        except Exception as e:
+            if progress:
+                progress(f"final save failed: {e}")
 
     return {
         "rows": len(valid),
@@ -229,7 +276,29 @@ def generate_asr(
         "skipped": skipped,
         "duration_dropped": duration_dropped,
         "out_dir": out_dir,
+        "written": written,
     }
+
+
+def generate_asr(**kwargs) -> dict:
+    """Generate an ASR dataset (``wavs/`` + ``metadata.jsonl``).
+
+    Thin wrapper over :func:`generate` with ASR output. ``pairs`` typically come
+    from a large, diverse pool of reference audio.
+    """
+    kwargs.setdefault("output_formats", ("asr",))
+    return generate(**kwargs)
+
+
+def generate_tts(**kwargs) -> dict:
+    """Generate a TTS dataset (``wavs/`` + LJSpeech ``metadata.csv``).
+
+    Thin wrapper over :func:`generate` with LJSpeech output. ``pairs`` typically
+    come from a small set of speakers (the packaged voices by default); pass
+    ``speaker_labels`` to record which speaker voiced each clip.
+    """
+    kwargs.setdefault("output_formats", ("ljspeech",))
+    return generate(**kwargs)
 
 
 # --------------------------------------------------------------------------- #
