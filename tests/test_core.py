@@ -1,53 +1,37 @@
-"""Tests for the GPU-free helpers and CLI parsing."""
+"""Offline tests for the GPU-free helpers, the language registry, and CLI parsing.
 
+These never touch the network or the VoxCPM server.
+"""
+
+import json
 import sys
 from pathlib import Path
 
-import numpy as np
-import soundfile as sf
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ghana_speech_datagen import clean_text, pick_gender, pick_speaker, sanitize_name, trim_silences, SPEAKERS, resolve_speakers
-from ghana_speech_datagen import cli
+from ghana_speech_datagen import (
+    clean_text,
+    sanitize_name,
+    export_formats,
+    builtin_speaker_refs,
+    generate,
+    generate_asr,
+    generate_tts,
+    SPEAKERS,
+    LANGUAGES,
+    lang_tag,
+    resolve_lang,
+    sources_for,
+)
+from ghana_speech_datagen import cli, text_sources
 
 
-def _dummy_wav(path, sr=16000, duration=3.0):
-    """Write a tiny valid WAV file."""
-    t = np.linspace(0, duration, int(sr * duration), endpoint=False)
-    sf.write(str(path), (np.sin(2 * np.pi * 440 * t) * 0.3).astype(np.float32), sr)
-
-
+# --------------------------------------------------------------------------- #
+# Pure helpers
+# --------------------------------------------------------------------------- #
 def test_clean_text():
     assert clean_text("  hello\n world  \t x ") == "hello world x"
     assert clean_text("a\n\nb") == "a b"
-
-
-def test_pick_speaker():
-    ids = ["alice", "bob", "carol"]
-    assert pick_speaker(0, ids) == "alice"
-    assert pick_speaker(1, ids) == "bob"
-    assert pick_speaker(2, ids) == "carol"
-    assert pick_speaker(3, ids) == "alice"   # wraps
-    assert pick_speaker(4, ids) == "bob"
-    assert pick_speaker(5, ids) == "carol"
-    assert pick_speaker(0, ["only"]) == "only"
-    assert pick_speaker(999, ["only"]) == "only"
-
-
-def test_pick_gender_modes():
-    assert pick_gender(0, "male", 50) == "male"
-    assert pick_gender(7, "all male", 50) == "male"
-    assert pick_gender(0, "female", 50) == "female"
-    assert pick_gender(3, "all female", 50) == "female"
-
-
-def test_pick_gender_custom_deterministic_and_split():
-    assert pick_gender(42, "custom", 50) == pick_gender(42, "custom", 50)
-    assert all(pick_gender(i, "custom", 100) == "male" for i in range(50))
-    assert all(pick_gender(i, "custom", 0) == "female" for i in range(50))
-    males = sum(pick_gender(i, "custom", 50) == "male" for i in range(1000))
-    assert 400 < males < 600
 
 
 def test_sanitize_name():
@@ -56,64 +40,192 @@ def test_sanitize_name():
     assert sanitize_name("twi_run-2") == "twi_run-2"
 
 
-def test_trim_silences_keeps_audio_and_shortens_gaps():
-    sr = 16000
-    tone = np.sin(np.linspace(0, 50, sr)).astype("float32")
-    gap = np.zeros(sr * 2, dtype="float32")
-    wav = np.concatenate([tone, gap, tone])
-    out = trim_silences(wav, sr=sr)
-    assert out.size > 0
-    assert out.size < wav.size
-    assert out.size >= 2 * sr
-
-
 def test_speakers_loaded():
     for g in ("male", "female"):
         assert SPEAKERS[g]["text"]
         assert Path(SPEAKERS[g]["wav"]).exists()
 
 
-def test_resolve_speakers_default():
-    spk = resolve_speakers(None)
-    assert spk["male"]["text"] == SPEAKERS["male"]["text"]
-    assert spk["female"]["text"] == SPEAKERS["female"]["text"]
+def test_builtin_speaker_refs():
+    refs = builtin_speaker_refs()
+    assert len(refs) == len(SPEAKERS)
+    for wav, text in refs:
+        assert Path(wav).exists()
+        assert text
 
 
-def test_resolve_speakers_custom(tmp_path):
-    txt = tmp_path / "custom.txt"
-    txt.write_text("custom prompt", encoding="utf-8")
-    wav = tmp_path / "custom.wav"
-    wav.touch()
-    overrides = {"male": {"wav": str(wav), "txt": txt}}
-    spk = resolve_speakers(overrides)
-    assert spk["male"]["text"] == "custom prompt"
-    assert spk["female"]["text"] == SPEAKERS["female"]["text"]  # unchanged
+# --------------------------------------------------------------------------- #
+# Language registry
+# --------------------------------------------------------------------------- #
+def test_lang_tag_format():
+    # Must match the training-time tag exactly: "<|lang:CODE|> "
+    assert lang_tag("ewe") == "<|lang:ewe|> "
+    assert lang_tag("twi-asante") == "<|lang:twi-asante|> "
 
 
-def test_resolve_speakers_inline_text():
-    overrides = {"male": {"wav": "/dummy.wav", "text": "inline text"}}
-    spk = resolve_speakers(overrides)
-    assert spk["male"]["text"] == "inline text"
+def test_resolve_lang_variants():
+    assert resolve_lang("ewe") == "ewe"
+    assert resolve_lang("Ewe") == "ewe"
+    assert resolve_lang("Ewe_ewe") == "ewe"          # config name
+    assert resolve_lang("Asante Twi") == "twi-asante"  # display name
+    assert resolve_lang("twi") == "twi-asante"        # alias
+    assert resolve_lang("english") == "en"
 
 
-def test_precision_and_instances():
-    from ghana_speech_datagen import auto_instances
+def test_resolve_lang_unknown():
+    try:
+        resolve_lang("klingon")
+    except ValueError as e:
+        assert "Unknown language" in str(e)
+    else:
+        raise AssertionError("expected ValueError for unknown language")
+
+
+def test_every_language_has_a_source():
+    for code in LANGUAGES:
+        assert sources_for(code), f"{code} has no text source"
+
+
+def test_twi_has_extra_source():
+    datasets = {s.dataset for s in sources_for("twi-asante")}
+    assert text_sources.GHANA_SPEECH in datasets
+    assert "ghananlpcommunity/twi-health-asr-gemini-500hrs" in datasets
+
+
+def test_ghana_speech_configs_map_to_codes():
+    # Twi is split by dialect; everything else uses the trailing ISO code.
+    assert LANGUAGES["twi-akuapem"].gs_config == "Akuapem_Twi_twi"
+    assert LANGUAGES["twi-asante"].gs_config == "Asante_Twi_twi"
+    assert LANGUAGES["ewe"].gs_config == "Ewe_ewe"
+    assert LANGUAGES["fat"].gs_config == "Fante_fat"
+    assert LANGUAGES["en"].gs_config is None  # English audio lives elsewhere
+
+
+def test_format_language_table():
+    table = text_sources.format_language_table()
+    assert "ewe" in table and "twi-asante" in table and "English" in table
+
+
+# --------------------------------------------------------------------------- #
+# Generation wrappers
+# --------------------------------------------------------------------------- #
+def test_generate_wrappers_exist():
+    import inspect
+    # Both wrappers must exist and route through the shared core.
+    assert callable(generate) and callable(generate_asr) and callable(generate_tts)
+    sig = inspect.signature(generate)
+    for kw in ("pairs", "output_formats", "speaker_labels", "lang"):
+        assert kw in sig.parameters
+
+
+# --------------------------------------------------------------------------- #
+# CLI parsing — both subcommands
+# --------------------------------------------------------------------------- #
+def test_cli_has_both_subcommands():
+    # tts and asr must both parse.
+    tts = cli.build_parser().parse_args(["tts", "--lang", "ewe"])
+    asr = cli.build_parser().parse_args(["asr", "--lang", "ewe"])
+    assert tts.command == "tts" and asr.command == "asr"
+
+
+def test_cli_tts_speaker_args():
     a = cli.build_parser().parse_args(
-        ["tts", "--text-file", "s.txt", "--precision", "bf16", "--sample-rate", "24000"])
-    assert a.precision == "bf16" and a.sample_rate == 24000
+        ["tts", "--lang", "ewe", "--voices", "male", "--sample-rate", "22050"])
+    assert a.voices == "male" and a.sample_rate == 22050
 
 
+def test_build_tts_speakers_default_packaged():
+    a = cli.build_parser().parse_args(["tts", "--lang", "ewe", "--voices", "both"])
+    spk = cli._build_tts_speakers(a)
+    assert {s[0] for s in spk} == {"male", "female"}
+    for label, wav, text in spk:
+        assert Path(wav).exists() and text
+
+
+def test_build_tts_speakers_single_voice():
+    a = cli.build_parser().parse_args(["tts", "--lang", "ewe", "--voices", "female"])
+    spk = cli._build_tts_speakers(a)
+    assert [s[0] for s in spk] == ["female"]
+
+
+def test_build_tts_speakers_custom_dir(tmp_path):
+    import numpy as np
+    import soundfile as sf
+    for nm in ("alice", "bob"):
+        sf.write(str(tmp_path / f"{nm}.wav"),
+                 (np.sin(np.linspace(0, 100, 16000 * 3)) * 0.3).astype("float32"), 16000)
+        (tmp_path / f"{nm}.txt").write_text(f"{nm} prompt", encoding="utf-8")
+    a = cli.build_parser().parse_args(["tts", "--lang", "ewe", "--speaker-dir", str(tmp_path)])
+    spk = cli._build_tts_speakers(a)
+    assert {s[0] for s in spk} == {"alice", "bob"}
+
+
+def test_push_defaults_on_for_both():
+    # Auto-push is the default; --save-every controls incremental cadence.
+    for cmd in ("tts", "asr"):
+        a = cli.build_parser().parse_args([cmd, "--lang", "ewe"])
+        assert a.no_push is False
+        assert a.save_every == 200
+        b = cli.build_parser().parse_args([cmd, "--lang", "ewe", "--no-push",
+                                           "--save-every", "50"])
+        assert b.no_push is True and b.save_every == 50
+
+
+def test_generate_accepts_incremental_save_params():
+    import inspect
+    sig = inspect.signature(generate)
+    assert sig.parameters["save_every"].default == 0
+    assert "on_save" in sig.parameters
+
+
+def test_cli_parses_lang():
+    a = cli.build_parser().parse_args(["asr", "--lang", "ewe", "--hours", "5"])
+    assert a.lang == "ewe" and a.hours == 5.0
+
+
+def test_cli_parses_list_langs():
+    a = cli.build_parser().parse_args(["asr", "--list-langs"])
+    assert a.list_langs is True
+
+
+def test_cli_parses_byo_sources():
+    a = cli.build_parser().parse_args(
+        ["asr", "--dataset", "org/ds", "--text", "text",
+         "--ref-dataset", "org/refs", "--hours", "2", "--max-samples", "500"])
+    assert a.dataset == "org/ds" and a.text_column == "text"
+    assert a.ref_dataset == "org/refs" and a.max_samples == 500
+
+
+def test_cmd_asr_rejects_no_text_source():
+    # No --lang, --dataset, or --text-file -> should exit with guidance.
+    try:
+        cli.main(["asr"])
+    except SystemExit as e:
+        assert "lang" in str(e) or "text-file" in str(e) or "dataset" in str(e)
+    else:
+        raise AssertionError("expected SystemExit without a text source")
+
+
+def test_cmd_asr_rejects_bad_lang():
+    try:
+        cli.main(["asr", "--lang", "klingon"])
+    except SystemExit as e:
+        assert "Unknown language" in str(e)
+    else:
+        raise AssertionError("expected SystemExit for unknown language")
+
+
+# --------------------------------------------------------------------------- #
+# Export
+# --------------------------------------------------------------------------- #
 def test_export_formats(tmp_path):
-    import json
-    from ghana_speech_datagen import export_formats
-
     run = tmp_path / "run"
     (run / "wavs").mkdir(parents=True)
     rows = [
         {"id": "0000000_ab", "file": "wavs/0000000_ab.wav", "text": "hello there",
-         "gender": "male", "speaker": "male", "duration": 1.2},
+         "duration": 1.2},
         {"id": "0000001_ab", "file": "wavs/0000001_ab.wav", "text": "good morning",
-         "gender": "female", "speaker": "female", "duration": 1.0},
+         "duration": 1.0},
     ]
     (run / "manifest.jsonl").write_text(
         "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
@@ -126,92 +238,3 @@ def test_export_formats(tmp_path):
     asr = [json.loads(l) for l in (run / "metadata.jsonl").read_text().splitlines() if l.strip()]
     assert asr[0] == {"audio": "wavs/0000000_ab.wav", "text": "hello there"}
     assert asr[1] == {"audio": "wavs/0000001_ab.wav", "text": "good morning"}
-
-
-def test_cli_speaker_args():
-    a = cli.build_parser().parse_args(["tts", "--text-file", "s.txt", "--speaker-dir", "/speakers",
-                                       "--ref-text", "hello"])
-    assert a.speaker_dir == "/speakers"
-    assert a.ref_text == "hello"
-
-
-def test_cli_build_speakers(tmp_path):
-    wav1 = tmp_path / "speaker1.wav"
-    _dummy_wav(wav1)
-    txt1 = tmp_path / "speaker1.txt"
-    txt1.write_text("prompt one", encoding="utf-8")
-    wav2 = tmp_path / "speaker2.wav"
-    _dummy_wav(wav2)
-    txt2 = tmp_path / "speaker2.txt"
-    txt2.write_text("prompt two", encoding="utf-8")
-
-    class Args:
-        speaker_dir = str(tmp_path)
-        ref_text = None
-        min_ref_duration = 1.0
-        max_ref_duration = 15.0
-    spk = cli._build_speakers(Args())
-    assert set(spk) == {"speaker1", "speaker2"}
-    assert spk["speaker1"]["wav"] == str(wav1)
-    assert spk["speaker1"]["text"] == "prompt one"
-    assert spk["speaker2"]["wav"] == str(wav2)
-    assert spk["speaker2"]["text"] == "prompt two"
-
-
-def test_build_speakers_ref_text(tmp_path):
-    wav = tmp_path / "alice.wav"
-    _dummy_wav(wav)
-    class Args:
-        speaker_dir = str(tmp_path)
-        ref_text = "shared prompt"
-        min_ref_duration = 1.0
-        max_ref_duration = 15.0
-    spk = cli._build_speakers(Args())
-    assert spk["alice"]["text"] == "shared prompt"
-
-
-def test_generate_params():
-    import inspect
-    from ghana_speech_datagen.generator import generate as _gen
-    sig = inspect.signature(_gen)
-    for kw in ("on_save", "max_samples", "min_duration", "max_duration"):
-        assert kw in sig.parameters
-    assert sig.parameters["on_save"].default is None
-
-
-def test_cli_token_required(tmp_path):
-    # Should exit with "No token provided" when none given (prompt returns empty in non-tty)
-    sfile = tmp_path / "s.txt"
-    sfile.write_text("hello\n")
-    try:
-        cli.main(["tts", "--text-file", str(sfile)])
-    except SystemExit as e:
-        assert "No token provided" in str(e) or "HF_TOKEN" in str(e)
-    else:
-        raise AssertionError("expected SystemExit without token")
-
-
-def test_cli_parser_and_requirements():
-    a = cli.build_parser().parse_args(
-        ["tts", "--dataset", "org/ds", "--text", "text", "--hours", "5",
-         "--voices", "custom", "--male-pct", "60", "--name", "run1",
-         "--max-samples", "500",
-         "--min-duration", "1.0", "--max-duration", "15.0"])
-    assert a.dataset == "org/ds" and a.text_column == "text"
-    assert a.hours == 5 and a.voices == "custom" and a.male_pct == 60
-    assert a.max_samples == 500
-    assert a.min_duration == 1.0
-    assert a.max_duration == 15.0
-
-    assert cli.build_parser().parse_args(["tts", "--text-file", "s.txt"]).text_file == "s.txt"
-
-    b = cli.build_parser().parse_args(["tts", "--text-file", "s.txt", "--ref-text", "my prompt"])
-    assert b.ref_text == "my prompt"
-
-    # Should exit with source error when token IS set but no source is given
-    try:
-        cli.main(["tts", "--split", "train", "--token", "dummy"])
-    except SystemExit as e:
-        assert "text-file" in str(e) or "dataset" in str(e)
-    else:
-        raise AssertionError("expected SystemExit without a source")

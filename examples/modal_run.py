@@ -2,7 +2,10 @@
 
 Usage:
     export MODAL_TOKEN_ID=... MODAL_TOKEN_SECRET=...
-    modal run examples/modal_run.py --dataset ghananlpcommunity/some-text --text text --hours 2
+    # Turnkey: built-in default text + in-language reference voices
+    modal run examples/modal_run.py --lang ewe --hours 2
+    # Or bring your own text dataset
+    modal run examples/modal_run.py --dataset ghananlpcommunity/some-text --text-column text --hours 2
 
 Required secrets:
     hf-token   Hugging Face token (read access to the private model)
@@ -32,8 +35,9 @@ image = (
     secrets=[modal.Secret.from_name("hf-token")],
 )
 def run(
-    dataset: str,
-    text_column: str,
+    lang: str | None = None,
+    dataset: str | None = None,
+    text_column: str | None = None,
     config: str | None = None,
     split: str = "train",
     hours: float = 1.0,
@@ -53,14 +57,22 @@ def run(
 
     os.environ["HF_TOKEN"] = hf_token
 
+    if not lang and not dataset:
+        raise RuntimeError("Provide --lang (for built-in default text) or "
+                           "--dataset + --text-column.")
+
     argv = [
-        "ghana-speech-datagen", "tts",
-        "--dataset", dataset,
-        "--text", text_column,
+        "ghana-speech-datagen", "asr",
         "--split", split,
         "--hours", str(hours),
         "--name", name,
     ]
+    if lang:
+        argv += ["--lang", lang]
+    if dataset:
+        argv += ["--dataset", dataset]
+        if text_column:
+            argv += ["--text", text_column]
     if config:
         argv += ["--config", config]
     if max_samples is not None:
