@@ -130,6 +130,8 @@ def build_parser() -> argparse.ArgumentParser:
                          help=f"minimum ref audio duration in seconds (default {DEFAULT_MIN_REF_DURATION})")
     asr_ref.add_argument("--max-ref-duration", type=float, default=DEFAULT_MAX_REF_DURATION,
                          help=f"maximum ref audio duration in seconds (default {DEFAULT_MAX_REF_DURATION})")
+    asr_ref.add_argument("--max-ref-samples", type=int,
+                         help="randomly pick at most this many reference clips (default: all)")
 
     asr_val = asr.add_argument_group("generation")
     asr_val.add_argument("--hours", type=float, default=1.0, help="target hours of audio")
@@ -277,7 +279,7 @@ def _cmd_asr(args):
     if args.ref_dataset:
         refs = _load_refs_from_dataset(
             args.ref_dataset, args.audio_column, args.ref_text_column,
-            args.ref_config, args.ref_split, None, token,
+            args.ref_config, args.ref_split, args.max_ref_samples, token,
             args.min_ref_duration, args.max_ref_duration,
         )
         default_name = sanitize_name(args.ref_dataset.split("/")[-1])
