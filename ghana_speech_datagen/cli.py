@@ -269,7 +269,7 @@ def _load_refs_from_local(audio_dir: str, metadata_path: str,
 def _cmd_asr(args):
     from . import generator
 
-    token = _resolve_token(args) if (args.push or args.dataset) else None
+    token = _resolve_token(args) if args.push else (args.token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"))
 
     texts = _load_texts(args.dataset, args.text_column, args.text_file,
                         args.config, args.split, args.max_samples, token)
