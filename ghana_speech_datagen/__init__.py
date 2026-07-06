@@ -1,47 +1,11 @@
-# -*- coding: utf-8 -*-
-"""VoxCPM synthetic-speech data generator -- turn text datasets into TTS/ASR training data.
-
-Voice-clones built-in male/female reference speakers with the Ghana NLP Community
-VoxCPM model (ghana-tts-36k), writing WAVs + a manifest, with parallel instances
-and resume.
-"""
-
-from .generator import (
-    DEFAULT_SR,
-    EXPORT_FORMATS,
-    MODEL_ID,
-    SAMPLE_RATE,
-    SPEAKERS,
-    auto_instances,
-    clean_text,
-    export_formats,
-    generate,
-    generate_asr,
-    pick_gender,
-    pick_speaker,
-    preview,
-    resolve_speakers,
-    sanitize_name,
-    trim_silences,
-)
+from .generator import generate_asr, export_formats, sanitize_name, clean_text, DEFAULT_SR
 
 __all__ = [
-    "DEFAULT_SR",
-    "EXPORT_FORMATS",
-    "MODEL_ID",
-    "SAMPLE_RATE",
-    "SPEAKERS",
-    "auto_instances",
-    "clean_text",
-    "export_formats",
-    "generate",
     "generate_asr",
-    "pick_gender",
-    "pick_speaker",
-    "preview",
-    "resolve_speakers",
+    "export_formats",
     "sanitize_name",
-    "trim_silences",
+    "clean_text",
+    "DEFAULT_SR",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
