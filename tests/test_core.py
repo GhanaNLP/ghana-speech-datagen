@@ -58,9 +58,14 @@ def test_builtin_speaker_refs():
 # Language registry
 # --------------------------------------------------------------------------- #
 def test_lang_tag_format():
-    # Must match the training-time tag exactly: "<|lang:CODE|> "
+    # VoxCPM2-Ghana was trained with the FULL language name, not the ISO code.
     assert lang_tag("ewe") == "<|lang:ewe|> "
-    assert lang_tag("twi-asante") == "<|lang:twi-asante|> "
+    assert lang_tag("twi-asante") == "<|lang:twi-asante|> "  # Twi keeps dialect form
+    assert lang_tag("fat") == "<|lang:fante|> "     # not <|lang:fat|>
+    assert lang_tag("ada") == "<|lang:dangme|> "    # not <|lang:ada|>
+    assert lang_tag("gur") == "<|lang:ninkare|> "   # not <|lang:gur|>
+    assert lang_tag("nzi") == "<|lang:nzema|> "
+    assert lang_tag("xsm") == "<|lang:kasem|> "
 
 
 def test_resolve_lang_variants():

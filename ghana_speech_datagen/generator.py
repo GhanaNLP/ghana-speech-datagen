@@ -158,7 +158,11 @@ def generate(
     wav_dir = os.path.join(out_dir, "wavs")
     os.makedirs(wav_dir, exist_ok=True)
 
-    tag = f"<|lang:{lang}|> " if lang else ""
+    if lang:
+        from ghana_speech_datagen import text_sources
+        tag = text_sources.lang_tag(lang)   # full-name tag (e.g. <|lang:fante|> )
+    else:
+        tag = ""
 
     def _flush(rows: list) -> list:
         """Write manifest.jsonl + requested formats; return the format paths."""

@@ -101,15 +101,66 @@ class Language:
     code: str
     name: str
     gs_config: str | None  # ghana-speech config for reference audio, if any
+    tag: str               # the <|lang:TAG|> value the model was trained with
+
+
+# VoxCPM2-Ghana was trained with the FULL language name as the ``<|lang:…|>`` tag
+# (NOT the ISO-639-3 code), per its latent-precompute mapping. Keyed by the
+# ghana-speech config; Twi keeps its dialect-hyphenated form.
+_TRAINING_TAG: dict[str, str] = {
+    "Akuapem_Twi_twi": "twi-akuapem",
+    "Anyin_any": "anyin",
+    "Asante_Twi_twi": "twi-asante",
+    "Avatime_avn": "avatime",
+    "Bassar_Ntcham_bud": "ntcham",
+    "Bimoba_bim": "bimoba",
+    "Birifor_Southern_biv": "birifor",
+    "Bissa_bib": "bissa",
+    "Buli_bwu": "buli",
+    "Chumburung_ncu": "chumburung",
+    "Dagaare_dga": "dagaare",
+    "Dagbani_dag": "dagbani",
+    "Dangme_ada": "dangme",
+    "Deg_mzw": "deg",
+    "Ewe_ewe": "ewe",
+    "Fante_fat": "fante",
+    "Fulfulde_Maasina_ffm": "fulfulde",
+    "Gikyode_acd": "gikyode",
+    "Gonja_gjn": "gonja",
+    "Hausa_hau": "hausa",
+    "Kabiye_kbp": "kabiye",
+    "Kasem_xsm": "kasem",
+    "Konkomba_xon": "konkomba",
+    "Konni_kma": "konni",
+    "Kusaal_kus": "kusaal",
+    "Lelemi_lef": "lelemi",
+    "Mampruli_maw": "mampruli",
+    "Nawuri_naw": "nawuri",
+    "Ninkare_gur": "ninkare",
+    "Nkonya_nko": "nkonya",
+    "Ntrubo_ntr": "ntrubo",
+    "Nzema_nzi": "nzema",
+    "Paasaal_sig": "paasaal",
+    "Sehwi_sfw": "sehwi",
+    "Sekpele_lip": "sekpele",
+    "Selee_snw": "selee",
+    "Sisaala_Tumulung_sil": "sisaala",
+    "Siwu_akp": "siwu",
+    "Tampulma_tpm": "tampulma",
+    "Tem_kdh": "tem",
+    "Tuwuli_bov": "tuwuli",
+    "Vagla_vag": "vagla",
+}
 
 
 LANGUAGES: dict[str, Language] = {
-    code: Language(code=code, name=name, gs_config=config)
+    code: Language(code=code, name=name, gs_config=config,
+                   tag=_TRAINING_TAG.get(config, code))
     for config, code, name in _GHANA_SPEECH_LANGS
 }
 # English is a valid model tag but lives in a separate dataset (no ghana-speech
 # config), so it has no default reference-audio pool of its own.
-LANGUAGES["en"] = Language(code="en", name="English", gs_config=None)
+LANGUAGES["en"] = Language(code="en", name="English", gs_config=None, tag="en")
 
 
 # --------------------------------------------------------------------------- #
@@ -164,8 +215,14 @@ _ALIASES["akan"] = "twi-asante"
 # Public helpers
 # --------------------------------------------------------------------------- #
 def lang_tag(code: str) -> str:
-    """Return the literal tag the model expects, e.g. ``'<|lang:ewe|> '``."""
-    return f"<|lang:{code}|> "
+    """Return the literal tag the model expects, e.g. ``'<|lang:fante|> '``.
+
+    VoxCPM2-Ghana was trained with the full language name (``fante``, ``dangme``,
+    ``ninkare`` …), not the ISO-639-3 code — so this maps the code through the
+    language table's training tag.
+    """
+    lang = LANGUAGES.get(code)
+    return f"<|lang:{lang.tag if lang else code}|> "
 
 
 def resolve_lang(name: str) -> str:
