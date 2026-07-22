@@ -1,7 +1,7 @@
 # Datagen client deps only. The VoxCPM2 TTS model runs as a separate
 # vLLM-Omni GPU server (see deploy/README.md) — no ML runtime needed here.
 requests>=2.28
-datasets>=2.19
+datasets>=2.19,<3   # 4+ decodes Audio via torchcodec (needs torch); 2.x uses soundfile
 huggingface_hub>=0.23
 soundfile>=0.12
 librosa>=0.10
