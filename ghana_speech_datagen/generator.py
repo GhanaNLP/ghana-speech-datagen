@@ -1,8 +1,9 @@
-"""Core synthetic-speech generation using VoxCPM.cpp (GGML/CUDA/CPU).
+"""Core synthetic-speech generation against a vLLM-Omni VoxCPM2 TTS server.
 
 Streams text-reference pairs, synthesises each row with the Ghana NLP Community
-VoxCPM GGUF model via VoxCPM.cpp, and writes WAVs at the chosen sample rate +
-manifests.  Supports CPU and CUDA backends.
+VoxCPM2 model served by vLLM-Omni (OpenAI-compatible speech API), and writes
+WAVs at the chosen sample rate + manifests. The model runs as a standalone GPU
+server (see ``deploy/``); this module is a pure HTTP client.
 """
 
 from __future__ import annotations
@@ -21,8 +22,8 @@ import numpy as np
 import soundfile as sf
 
 
-SAMPLE_RATE = 16000       # native rate the model synthesises at
-DEFAULT_SR = 22050        # default OUTPUT rate (TTS-friendly); override with --sample-rate
+SAMPLE_RATE = 16000       # rate the packaged reference voices are normalised to
+DEFAULT_SR = 24000        # default OUTPUT rate (TTS-friendly); override with --sample-rate
 
 _SPEAKER_DIR = Path(__file__).resolve().parent / "speakers"
 SPEAKERS: dict[str, dict] = {}
@@ -101,7 +102,7 @@ def resample(wav, src_sr: int, dst_sr: int):
 
 
 # --------------------------------------------------------------------------- #
-# Core generation (VoxCPM.cpp)
+# Core generation (vLLM-Omni VoxCPM2 server)
 # --------------------------------------------------------------------------- #
 def generate(
     *,
@@ -119,10 +120,12 @@ def generate(
     on_save=None,
     save_every: int = 0,
     progress=None,
-    backend: str | None = None,
+    server_url: str | None = None,
+    api_key: str | None = None,
+    model: str = "voxcpm2",
     lang: str | None = None,
 ) -> dict:
-    """Synthesise speech from texts using VoxCPM.cpp.
+    """Synthesise speech from texts against a vLLM-Omni VoxCPM2 server.
 
     ``pairs`` is a list of ``(text_to_synthesise, ref_audio, ref_text)`` tuples.
     Each text is voiced by its paired reference audio (the voice prompt).
@@ -139,20 +142,19 @@ def generate(
     ``speaker_labels`` -- optional list parallel to ``pairs``; when given, each
     manifest row records which speaker voiced it (useful for multi-speaker TTS).
 
-    ``lang`` -- optional language code. When set, the model's language tag
-    ``<|lang:CODE|> `` is prepended to each text *for synthesis only*; the
-    manifests still store the clean transcript (the tag is a TTS control token,
-    not part of what is spoken).
+    ``lang`` -- optional language code, recorded for bookkeeping only. VoxCPM2
+    infers language from the text's script and the reference voice, so (unlike
+    the old v1 model) no ``<|lang:|>`` control tag is injected.
 
-    ``backend`` -- ``"cuda"`` (default) or ``"cpu"``.
+    ``server_url`` / ``api_key`` / ``model`` -- how to reach the running
+    vLLM-Omni TTS server (defaults come from ``TTS_SERVER_URL`` / ``TTS_API_KEY``
+    / ``TTS_MODEL_NAME`` env vars).
     """
-    from ghana_speech_datagen.voxcpm_cpp import VoxCPMCppServer
+    from ghana_speech_datagen.tts_client import VoxCPM2Client
 
     out_dir = str(out_dir)
     wav_dir = os.path.join(out_dir, "wavs")
     os.makedirs(wav_dir, exist_ok=True)
-
-    tag = f"<|lang:{lang}|> " if lang else ""
 
     def _flush(rows: list) -> list:
         """Write manifest.jsonl + requested formats; return the format paths."""
@@ -170,11 +172,7 @@ def generate(
                 if progress:
                     progress(f"save failed: {e}")
 
-    with VoxCPMCppServer(
-        voice_dir=os.path.join(out_dir, ".voxcpm-voices"),
-        max_decode_steps=1024,
-        backend=backend,
-    ) as server:
+    with VoxCPM2Client(base_url=server_url, api_key=api_key, model=model) as server:
         server.wait_until_ready(timeout=120.0)
 
         # Normalise + register each unique reference voice once, then map every
@@ -215,8 +213,8 @@ def generate(
                 continue
 
             try:
-                wav_bytes = server.synthesize(vid, tag + text, response_format="wav")
-                data, sr = sf.read(io.BytesIO(wav_bytes))
+                wav_bytes = server.synthesize(vid, text, response_format="wav")
+                data, native_sr = sf.read(io.BytesIO(wav_bytes))
                 if data.ndim > 1:
                     data = data.mean(axis=1)
                 wav = np.asarray(data, dtype=np.float32)
@@ -224,7 +222,7 @@ def generate(
                 skipped += 1
                 continue
 
-            wav = resample(wav, SAMPLE_RATE, int(sample_rate))
+            wav = resample(wav, int(native_sr), int(sample_rate))
             dur = float(len(wav)) / sample_rate
 
             if dur < min_duration or dur > max_duration:

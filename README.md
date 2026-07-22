@@ -1,8 +1,10 @@
 # Ghana Speech Datagen
 
-Generate synthetic speech training data using **VoxCPM.cpp** (GGML/CUDA/CPU) — no
-PyTorch needed. Feeds text through the Ghana NLP Community VoxCPM GGUF model,
-voice-cloning from reference audio.
+Generate synthetic speech training data against a **vLLM-Omni VoxCPM2 TTS
+server**. The tool itself is a lightweight HTTP client (no PyTorch, no local
+model) — deploy the [`ghananlpcommunity/VoxCPM2-Ghana`](https://huggingface.co/ghananlpcommunity/VoxCPM2-Ghana)
+model once on a GPU (see [`deploy/`](deploy/README.md)), then generate as many
+datasets as you want against its API, voice-cloning from reference audio.
 
 **You don't have to bring your own text.** Just pass `--lang` and the tool pulls
 default text (and reference voices) for that language automatically:
@@ -12,9 +14,10 @@ ghana-speech-datagen tts --lang ewe --hours 5   # → TTS dataset (LJSpeech)
 ghana-speech-datagen asr --lang ewe --hours 5   # → ASR dataset (JSONL manifest)
 ```
 
-This uses the model's language tag (`<|lang:ewe|> …`, exactly as the model was
-trained) so pronunciation matches the language. You can still bring your own text
-(`--dataset`/`--text-file`) and reference audio when you want to.
+VoxCPM2 infers the language from the text's script and the reference voice, so
+`--lang` just selects the built-in text (and default reference pool) for that
+language. You can still bring your own text (`--dataset`/`--text-file`) and
+reference audio when you want to.
 
 ## Two modes
 
@@ -27,18 +30,19 @@ they use and the **output format** they write — each ready for its use case.
 | **Best for** | building a TTS voice/dataset with consistent speakers | building ASR training data with many speakers for robustness |
 | **Reference** | `--voices`, `--speaker-dir`, `--speaker` | `--ref-dataset`, `--ref-audio-dir`, or in-language default pool |
 | **Output** | LJSpeech: `wavs/` + `metadata.csv` (`id\|text\|text`) | `wavs/` + `metadata.jsonl` (`{"audio","text"}`) |
-| **Default rate** | 22050 Hz (TTS standard) | 22050 Hz |
+| **Default rate** | 24000 Hz | 24000 Hz |
 
 Every clip is also recorded in `manifest.jsonl` (full record, including
 `speaker` for `tts`).
 
-> **GPU recommended** for usable speed. VoxCPM.cpp with CUDA achieves ~3×
-> real-time (RTF 0.33) on an H200. Works on CPU too (`--backend cpu`) but is
-> much slower.
+> The heavy lifting happens on the **TTS server** (a GPU box running vLLM-Omni).
+> The datagen client is I/O-bound and can even run from your laptop against a
+> remote server. vLLM-Omni batches concurrent requests, so throughput scales far
+> beyond one-clip-at-a-time.
 
 ## Supported languages
 
-The `ghana-tts-36k` model supports **41+ Ghanaian languages** (plus English). Every
+The `VoxCPM2-Ghana` model supports **40+ Ghanaian languages** (plus English). Every
 language ships with a built-in default text source, so `--lang <code>` is all you
 need. List them with:
 
@@ -46,9 +50,8 @@ need. List them with:
 ghana-speech-datagen asr --list-langs
 ```
 
-Codes are the same tags the model was trained with — e.g. `ewe`, `fat`, `dag`,
-`twi-asante`, `twi-akuapem`, `en`. `--lang` also accepts a full config name
-(`Ewe_ewe`) or display name (`Asante Twi`).
+Codes are e.g. `ewe`, `fat`, `dag`, `twi-asante`, `twi-akuapem`, `en`. `--lang`
+also accepts a full config name (`Ewe_ewe`) or display name (`Asante Twi`).
 
 ### Adding more text sources
 
@@ -69,46 +72,33 @@ _EXTRA_SOURCES = {
 
 ## Setup
 
-### Prerequisites
+There are two pieces: the **TTS server** (on a GPU) and the **datagen client**
+(anywhere that can reach the server — even your laptop).
 
-- Linux with GCC/G++
-- CUDA 12+ (optional — for GPU backend)
-- CMake ≥ 3.22
-- Python 3.10+
+### 1. Deploy the TTS server
 
-### 1. Install VoxCPM.cpp
+Follow [`deploy/README.md`](deploy/README.md) — in short, on a GPU box:
 
 ```bash
-git clone https://github.com/your-org/voxcpm-cpp.git
-cd voxcpm-cpp
-mkdir build && cd build
-cmake .. -DGGML_CUDA=ON   # omit -DGGML_CUDA=ON for CPU-only
-make -j$(nproc) voxcpm-server voxcpm_tts
+# install vLLM-Omni (once), then:
+cd deploy
+API_KEY=my-secret bash serve.sh          # pulls VoxCPM2-Ghana from HF, serves :8000
 ```
 
-### 2. Download the GGUF model
+### 2. Install the datagen client
 
 ```bash
-# Q8_0 quantized model with F16 AudioVAE (~850 MB)
-cd voxcpm-cpp
-mkdir -p models
-wget -O models/ghana-tts-36k-q8_0-audiovae-f16.gguf \
-  https://huggingface.co/walusungungulube/ghana-tts-36k-gguf/resolve/main/ghana-tts-36k-q8_0-audiovae-f16.gguf
-```
-
-### 3. Install ghana-speech-datagen
-
-```bash
-git clone https://github.com/ghananlpcommunity/ghana-speech-datagen.git
+git clone https://github.com/GhanaNLP/ghana-speech-datagen.git
 cd ghana-speech-datagen
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-Set the `VOXCPM_SERVER_BIN` environment variable so the tool can find the server:
+Point it at your server (per-command flags also work):
 
 ```bash
-export VOXCPM_SERVER_BIN=/path/to/voxcpm-cpp/build/examples/voxcpm-server
+export TTS_SERVER_URL=http://your-gpu-host:8000
+export TTS_API_KEY=my-secret     # only if the server was started with API_KEY
 ```
 
 ## Quickstart — TTS
@@ -172,10 +162,10 @@ ghana-speech-datagen asr --text-file sentences.txt \
     --ref-audio-dir my_refs/ --ref-metadata refs.csv \
     --hours 2
 
-# Sub-sample texts, use CPU backend
+# Sub-sample texts, point at a remote TTS server
 ghana-speech-datagen asr --dataset org/text-ds --text text \
     --ref-dataset org/ref-audio-ds --ref-text-column text \
-    --max-samples 2000 --backend cpu
+    --max-samples 2000 --server-url http://gpu-host:8000
 
 # Send it to a specific HF dataset repo (instead of the auto-named one)
 ghana-speech-datagen asr --dataset org/text-ds --text text \
@@ -205,7 +195,7 @@ ghana-speech-datagen asr --lang ewe --hours 20 --private --save-every 500
 
 ```
 data/<name>/
-  wavs/<id>.wav            mono 16-bit PCM, at --sample-rate (default 22050)
+  wavs/<id>.wav            mono 16-bit PCM, at --sample-rate (default 24000)
   manifest.jsonl           full record per clip: id, file, text, duration (+ speaker for tts)
 
   # tts writes (LJSpeech, the standard TTS layout):
@@ -215,14 +205,13 @@ data/<name>/
   metadata.jsonl           {"audio":"wavs/...","text":"..."}
 ```
 
-The transcript in the manifests is the **clean spoken text** — the `<|lang:…|>`
-tag is only a synthesis control signal and is never written to disk.
+The transcript in the manifests is the **clean spoken text**.
 
 ## Options
 
 | flag | meaning |
 |------|---------|
-| `--lang CODE` | use built-in default text for a language; also sets the model's `<|lang:CODE|>` tag and defaults the reference pool to in-language audio |
+| `--lang CODE` | use built-in default text for a language and default the reference pool to in-language audio |
 | `--list-langs` | list supported languages and their default text sources |
 | `--dataset ID` / `--text COL` | source: an HF dataset with text to synthesise |
 | `--text-file PATH` | source: a .txt file with text to synthesise |
@@ -237,9 +226,11 @@ tag is only a synthesis control signal and is never written to disk.
 | `--min-duration` / `--max-duration` | drop generated clips outside this range (seconds) |
 | `--max-samples N` | randomly pick at most this many texts |
 | `--min-samples N` | minimum valid samples required (default 50) |
-| `--sample-rate HZ` | output WAV rate (default 22050) |
+| `--sample-rate HZ` | output WAV rate (default 24000) |
 | `--cfg` | CFG value passed to the server (default 2.0) |
-| `--backend cuda\|cpu` | inference backend (auto-detected if omitted) |
+| `--server-url URL` | TTS server base URL (env `TTS_SERVER_URL`; default `http://127.0.0.1:8000`) |
+| `--api-key KEY` | API key for the TTS server, if required (env `TTS_API_KEY`) |
+| `--model NAME` | served model name on the TTS server (default `voxcpm2`) |
 | `--name` / `--out` | run name (→ `data/<name>`) or explicit output dir |
 | `--push REPO` | override the auto-named HF dataset repo to push to |
 | `--no-push` | disable the default auto-push; generate locally only |
@@ -261,33 +252,36 @@ summary = generate_asr(
     out_dir="data/my-run",
     pairs=pairs,
     target_seconds=7200,
-    sample_rate=16000,
+    sample_rate=24000,
+    server_url="http://gpu-host:8000",
+    api_key="my-secret",           # if the server requires one
     on_clip=lambda dur: print(f"Generated {dur:.1f}s"),
 )
 # {'rows': ..., 'hours': ..., 'skipped': ..., 'duration_dropped': ...}
 ```
 
-For direct server control:
+For direct control of the TTS client:
 
 ```python
-from ghana_speech_datagen.voxcpm_cpp import VoxCPMCppServer
+from ghana_speech_datagen.tts_client import VoxCPM2Client
 
-with VoxCPMCppServer(voice_dir=".voices") as server:
-    server.wait_until_ready()
-    server.register_voice("spk1", "/refs/spk1.wav", "Prompt text")
-    wav_bytes = server.synthesize("spk1", "Text to speak", response_format="wav")
+with VoxCPM2Client(base_url="http://gpu-host:8000", api_key="my-secret") as tts:
+    tts.wait_until_ready()
+    tts.register_voice("spk1", "/refs/spk1.wav", "Prompt text")
+    wav_bytes = tts.synthesize("spk1", "Text to speak", response_format="wav")
 ```
 
 ## Performance
 
-- **Backend** — VoxCPM.cpp with GGML CUDA kernels. On an H200, RTF is ~0.33
-  (~55 steps/s, 11.4 s audio generated in 3.7 s wall time).
-- **CPU fallback** — backend is auto-detected (runs `nvidia-smi`); override with `--backend cpu`.
-- **Sample rate.** The model synthesises at **16 kHz**; output is resampled to
-  `--sample-rate`. Upsampling beyond 16 kHz doesn't add acoustic bandwidth.
-- **Single server process.** A single `voxcpm-server` handles all synthesis
-  requests. No parallel model instances needed — the GGUF model is already
-  highly optimized.
+- **The TTS server does the work.** Throughput comes from vLLM-Omni batching
+  concurrent requests on the GPU — see the tuning knobs in
+  [`deploy/voxcpm2.yaml`](deploy/voxcpm2.yaml) (KV-cache budget, batched CFM /
+  VAE decode). The datagen client is I/O-bound.
+- **Sample rate.** VoxCPM2 synthesises at a high rate and the output is
+  resampled to `--sample-rate` (default 24 kHz). The client reads the true rate
+  from each returned WAV rather than assuming one.
+- **Remote-friendly.** Because the client only speaks HTTP, you can run long
+  generation jobs from a small machine against a shared GPU server.
 
 ## Tests
 
@@ -301,12 +295,13 @@ pytest tests/
 ```
 ghana_speech_datagen/
   cli.py             the `ghana-speech-datagen` command
-  generator.py       ASR generation loop (generate_asr)
-  voxcpm_cpp.py      VoxCPMCppServer wrapper (manages server subprocess)
+  generator.py       generation loop (generate_asr / generate_tts)
+  tts_client.py      VoxCPM2Client — HTTP client for the vLLM-Omni TTS server
   speakers/          built-in male/female reference wav + text
-examples/
-  ghana_speech_datagen.ipynb   Colab runner (currently PyTorch-based, WIP)
-  modal_run.py                Modal runner (WIP)
+deploy/
+  serve.sh           launch the VoxCPM2 TTS server with vLLM-Omni
+  voxcpm2.yaml       tuned vLLM-Omni deploy config
+  README.md          how to deploy the server
 tests/
 ```
 

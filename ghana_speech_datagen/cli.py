@@ -1,6 +1,9 @@
 """Command-line interface for Ghana Speech Datagen.
 
-Subcommands (both need a GPU for usable speed):
+Talks to a standalone vLLM-Omni VoxCPM2 TTS server (deploy it on a GPU first;
+see deploy/README.md) over HTTP. Point it with --server-url / --api-key.
+
+Subcommands:
   tts   Synthesise a TTS dataset from a small speaker set (LJSpeech output)
   asr   Synthesise an ASR dataset from a large reference-audio pool (ASR output)
 """
@@ -29,6 +32,24 @@ MIN_ASR_SAMPLES = 50
 
 DEFAULT_MIN_REF_DURATION = 1.0
 DEFAULT_MAX_REF_DURATION = 15.0
+
+DEFAULT_SERVER_URL = os.environ.get("TTS_SERVER_URL", "http://127.0.0.1:8000")
+
+
+def _add_server_args(group):
+    """Connection flags for the standalone vLLM-Omni VoxCPM2 TTS server.
+
+    The model runs as a separate GPU deployment (see deploy/README.md); the
+    datagen is a pure HTTP client and only needs to know where it lives.
+    """
+    group.add_argument("--server-url", default=DEFAULT_SERVER_URL,
+                       help=f"vLLM-Omni TTS server base URL "
+                            f"(default {DEFAULT_SERVER_URL}; env TTS_SERVER_URL)")
+    group.add_argument("--api-key", default=os.environ.get("TTS_API_KEY"),
+                       help="API key for the TTS server, if it requires one "
+                            "(env TTS_API_KEY)")
+    group.add_argument("--model", dest="tts_model", default=os.environ.get("TTS_MODEL_NAME", "voxcpm2"),
+                       help="served model name on the TTS server (default: voxcpm2)")
 
 
 def _validate_ref_duration(duration: float, label: str,
@@ -116,8 +137,7 @@ def _push_repo(name: str, token: str, push: str | None = None, private: bool = F
 
 
 # Internal working dirs kept under the run folder but never published.
-_UPLOAD_IGNORE = [".voxcpm-voices/**", "_normalized/**",
-                  "**/.voxcpm-voices/**", "**/_normalized/**"]
+_UPLOAD_IGNORE = ["_normalized/**", "**/_normalized/**"]
 
 
 def _upload(out_dir: str, repo_id: str, token: str, msg: str = "update"):
@@ -184,13 +204,12 @@ def build_parser() -> argparse.ArgumentParser:
     tts_val.add_argument("--max-samples", type=int,
                          help="randomly pick at most this many texts")
 
-    tts_gen = tts.add_argument_group("model")
+    tts_gen = tts.add_argument_group("model / TTS server")
     tts_gen.add_argument("--sample-rate", type=int, default=DEFAULT_SR,
-                         help=f"output WAV rate (default {DEFAULT_SR}, the TTS standard)")
+                         help=f"output WAV rate (default {DEFAULT_SR})")
     tts_gen.add_argument("--cfg", type=float, default=2.0, dest="cfg_value",
                          help="CFG value")
-    tts_gen.add_argument("--backend", choices=["cuda", "cpu"], default="cuda",
-                         help="inference backend (default: cuda)")
+    _add_server_args(tts_gen)
 
     tts_out = tts.add_argument_group("output")
     tts_out.add_argument("--out", help="output directory (default: data/<name>)")
@@ -254,13 +273,12 @@ def build_parser() -> argparse.ArgumentParser:
     asr_val.add_argument("--max-samples", type=int,
                          help="randomly pick at most this many texts")
 
-    asr_gen = asr.add_argument_group("model")
+    asr_gen = asr.add_argument_group("model / TTS server")
     asr_gen.add_argument("--sample-rate", type=int, default=DEFAULT_SR,
                          help=f"output WAV rate (default {DEFAULT_SR})")
     asr_gen.add_argument("--cfg", type=float, default=2.0, dest="cfg_value",
                          help="CFG value")
-    asr_gen.add_argument('--backend', choices=['cuda', 'cpu'], default='cuda',
-                 help='inference backend (default: cuda)')
+    _add_server_args(asr_gen)
 
     asr_out = asr.add_argument_group("output")
     asr_out.add_argument("--out", help="output directory (default: data/<name>)")
@@ -498,7 +516,9 @@ def _cmd_tts(args):
         target_seconds=target_seconds,
         sample_rate=args.sample_rate,
         cfg_value=args.cfg_value,
-        backend=args.backend,
+        server_url=args.server_url,
+        api_key=args.api_key,
+        model=args.tts_model,
         lang=lang,
         on_clip=_on_clip,
         on_save=on_save,
@@ -610,7 +630,9 @@ def _cmd_asr(args):
         target_seconds=target_seconds,
         sample_rate=args.sample_rate,
         cfg_value=args.cfg_value,
-        backend=args.backend,
+        server_url=args.server_url,
+        api_key=args.api_key,
+        model=args.tts_model,
         lang=lang,
         on_clip=_on_clip,
         on_save=on_save,

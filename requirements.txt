@@ -1,5 +1,6 @@
-# GPU strongly recommended (VoxCPM TTS inference). System package: ffmpeg.
-voxcpm
+# Datagen client deps only. The VoxCPM2 TTS model runs as a separate
+# vLLM-Omni GPU server (see deploy/README.md) — no ML runtime needed here.
+requests>=2.28
 datasets>=2.19
 huggingface_hub>=0.23
 soundfile>=0.12
@@ -7,11 +8,3 @@ librosa>=0.10
 numpy
 scipy
 tqdm
-torch
-torchaudio
-transformers
-tokenizers
-accelerate
-sentencepiece
-modelscope
-funasr
